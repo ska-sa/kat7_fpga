@@ -45,7 +45,7 @@ class Correlator:
                        timeout=10,logger=self.floggers[s]) for s,server in enumerate(self.fsrvs)]
         self.allfpgas = self.ffpgas + self.xfpgas
 
-        time.sleep(0.5)
+        time.sleep(1)
         if not self.check_katcp_connections():
             self.check_katcp_connections(verbose=True)
             raise RuntimeError("Connection to FPGA boards failed.")
@@ -55,6 +55,7 @@ class Correlator:
 
     def disconnect_all(self):
         """Stop all TCP KATCP links to all FPGAs defined in the config file."""
+        #tested ok corr-0.5.0 2010-07-19
         try:
             for fpga in (self.allfpgas): fpga.stop()
         except:
@@ -62,6 +63,7 @@ class Correlator:
 
     def prog_all(self):
         """Programs all the FPGAs."""
+        #tested ok corr-0.5.0 2010-07-19
         for fpga in self.ffpgas:
             fpga.progdev(self.config['bitstream_f'])
         for fpga in self.xfpgas:
@@ -70,6 +72,7 @@ class Correlator:
 
     def deprog_all(self):
         """Deprograms all the FPGAs."""
+        #tested ok corr-0.5.0 2010-07-19
         for fpga in self.ffpgas:
             fpga.progdev('')
         for fpga in self.xfpgas:
@@ -101,20 +104,20 @@ class Correlator:
         """Writes to a 32-bit software register on all Fengines."""
         [fpga.write_int(register,value) for fpga in self.ffpgas]
 
-    def write_all_feng_ctrl(self, use_sram_tvg=False, use_fft_tvg1=False, use_fft_tvg2=False, arm_rst=False, mrst=False, clr_errors=False, soft_sync=False):
+    def feng_ctrl_set_all(self, use_sram_tvg=False, use_fft_tvg1=False, use_fft_tvg2=False, arm_rst=False, mrst=False, clr_status=False, soft_sync=False):
         """Writes a value to all the Fengine control registers."""
-        value = use_sram_tvg<<6 | use_fft_tvg2<<5 | use_fft_tvg1<<4 | clr_errors<<3 | arm_rst<<2 | soft_sync<<1 | mrst<<0
+        value = use_sram_tvg<<6 | use_fft_tvg2<<5 | use_fft_tvg1<<4 | clr_status<<3 | arm_rst<<2 | soft_sync<<1 | mrst<<0
         self.fwrite_int_all('control',value)
 
-    def read_all_feng_ctrl(self):
+    def feng_ctrl_get_all(self):
         """Reads and decodes the values from all the Fengine control registers."""
         all_values = self.fread_uint_all('control')
         return [{'mrst':bool(value&(1<<0)),
                 'soft_sync':bool(value&(1<<1)),
                 'arm':bool(value&(1<<2)),
-                'clr_errors':bool(value&(1<<3))} for value in all_values]
+                'clr_status':bool(value&(1<<3))} for value in all_values]
 
-    def write_all_xeng_ctrl(self,loopback_mux_rst=False, gbe_out_enable=False, gbe_disable=False, cnt_rst=False, gbe_rst=False, vacc_rst=False):
+    def xeng_ctrl_set_all(self,loopback_mux_rst=False, gbe_out_enable=False, gbe_disable=False, cnt_rst=False, gbe_rst=False, vacc_rst=False):
         """Writes a value to all the Xengine control registers."""
         value = gbe_out_enable<<16 | loopback_mux_rst<<10 | gbe_disable<<9 | cnt_rst<<8 | gbe_rst<<15 | vacc_rst<<0
         self.xwrite_int_all('ctrl',value)
@@ -126,16 +129,22 @@ class Correlator:
         for ant in range(f_per_fpga):
             self.fwrite_int_all("fft_shift%i"%ant,fft_shift)
 
-    def read_all_feng_status(self):
+    def feng_status_get_all(self):
         """Reads and decodes the status register from all the Fengines."""
+        rv={}
         for ant in range(self.config['n_ants']):
-            ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_input = self.get_ant_location(ant,pol)
-            stat = self.ffpgasead_uint_all('fstatus%i'%fn)
-            return [{'xaui_lnkdn':bool(value&(1<<2)),
-                    'xaui_over':bool(value&(1<<1)),
-                    'armed':bool(value&(1<<0))} for value in all_values]
+            for pol in self.config['pols']:
+                ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_input = self.get_ant_location(ant,pol)
+                value = self.ffpgas[ffpga_n].read_uint('fstatus%i'%feng_input)
+                #for xaui_n in range(self.config['n_xaui_per_ffpga
+                rv[(ant,pol)]={'xaui_lnkdn':bool(value&(1<<17)),
+                                'xaui_over':bool(value&(1<<16)),
+                                'adc_overrange':bool(value&(1<<2)),
+                                'fft_overrange':bool(value&(1<<1)),
+                                'quant_overrange':bool(value&(1<<0))}
+        return rv
 
-    def read_all_xeng_ctrl(self):
+    def xeng_ctrl_get_all(self):
         """Reads and decodes the values from all the Xengine control registers."""
         all_values = self.xread_uint_all('ctrl')
         return [{'gbe_out_enable':bool(value&(1<<16)),
@@ -148,39 +157,48 @@ class Correlator:
 
     def check_feng_clk_freq(self,verbose=False):
         """ Checks all Fengine FPGAs' clk_frequency registers to confirm correct PPS operation."""
+        #tested ok corr-0.5.0 2010-07-19
+        import stats
         all_values = self.fread_uint_all('clk_frequency')
         mode = stats.mode(all_values)
         modalmean=stats.mean(mode[1])
+        rv=True
         for fbrd,fsrv in enumerate(self.fsrvs):
-            if (all_values[fbrd] > (modalmean+1)) or (all_values[fbrd] < (modalmean -1)):
-                if verbose: print "\tClocks between PPS pulses on %s is %i, where mode is %i."%(fsrv,all_values[fbrd], modalmean)
+            if verbose: 
+                if all_values[fbrd] == 0: print '\tNo PPS detected on %s.'%fsrv
+                else:   print "\tClocks between PPS pulses on %s is %i, where mode is %i."%(fsrv,all_values[fbrd], modalmean)
+            if (all_values[fbrd] > (modalmean+2)) or (all_values[fbrd] < (modalmean -2)) or (all_values[fbrd]==0):
                 rv=False
         return rv
 
     def feng_uptime(self):
         """Returns a list of tuples of (armed_status and pps_count) for all fengine fpgas. Where the count since last arm of the pps signals received (and hence number of seconds since last arm)."""
+        #tested ok corr-0.5.0 2010-07-19
         all_values = self.fread_uint_all('pps_count')
         pps_cnt = [val & 0x7FFFFFFF for val in all_values]
         arm_stat = [bool(val & 0x80000000) for val in all_values]
         return [(arm_stat[fn],pps_cnt[fn]) for fn in range(len(self.ffpgas))]
 
-    def get_current_mcnt(self):
+    def mcnt_current_get(self):
         "Returns a list of mcnts for all connected f engine FPGAs"
-        msw = self.fread_uint_all('mcnt_msw')
-        lsw = self.fread_uint_all('mcnt_lsw')
-        mcnt = [(msw[i] << 32) + lsw[i] for i in self.fsrvs]
+        #tested ok corr-0.5.0 2010-07-19
+        msw = self.fread_uint_all('mcount_msw')
+        lsw = self.fread_uint_all('mcount_lsw')
+        mcnt = [(msw[i] << 32) + lsw[i] for i,srv in enumerate(self.fsrvs)]
         return mcnt
     
     def arm(self):
         """Arms all F engines. Returns the UTC time at which the system was sync'd in seconds since the Unix epoch (MCNT=0)"""
+        #tested ok corr-0.5.0 2010-07-19
         #wait for within 100ms of a half-second, then send out the arm signal.
         ready=(int(time.time()*10)%5)==0
         while not ready: 
             ready=(int(time.time()*10)%5)==0
-        trig_time=numpy.ceil(time.time()+1) #Syncs on the next second, to ensure any sync pulses already in the datapipeline have a chance to propagate out.
-        self.write_all_feng_ctrl(arm_rst=False)
-        self.write_all_feng_ctrl(arm_rst=True)
+        trig_time=int(numpy.ceil(time.time()+1)) #Syncs on the next second, to ensure any sync pulses already in the datapipeline have a chance to propagate out.
+        self.feng_ctrl_set_all(arm_rst=False)
+        self.feng_ctrl_set_all(arm_rst=True)
         self.config.write('correlator','sync_time',trig_time)
+        self.feng_ctrl_set_all(arm_rst=False)
         return trig_time
 
     def get_roach_gbe_conf(self,start_addr,fpga,port):
@@ -194,15 +212,17 @@ class Correlator:
 
     def rst_cnt(self):
         """Resets all error counters on the X engines."""
-        self.write_all_xeng_ctrl(cnt_rst=False)
-        self.write_all_xeng_ctrl(cnt_rst=True)
+        self.xeng_ctrl_set_all(cnt_rst=False)
+        self.xeng_ctrl_set_all(cnt_rst=True)
 
-    def get_xeng_clks(self):
+    def xeng_clks_get(self):
         """Returns the approximate clock rate of each X engine FPGA in MHz."""
+        #tested ok corr-0.5.0 2010-07-19
         return [fpga.est_brd_clk() for fpga in self.xfpgas]
 
-    def get_feng_clks(self):
+    def feng_clks_get(self):
         """Returns the approximate clock rate of each F engine FPGA in MHz."""
+        #tested ok corr-0.5.0 2010-07-19
         return [fpga.est_brd_clk() for fpga in self.ffpgas]
 
     def check_katcp_connections(self,verbose=False):
@@ -399,14 +419,15 @@ class Correlator:
             ant += self.config['f_per_feng']
 
     def get_ant_location(self, ant, pol='x'):
-        " Returns the (ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_inputinputinputinputinputinputinputinputinput) location for a given antenna. Ant is integer, as are all returns."
+        " Returns the (ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_input) location for a given antenna. Ant is integer, as are all returns."
+        #tested ok corr-0.5.0 2010-07-19
         if ant > self.config['n_ants']: 
             raise RuntimeError("There is no antenna %i in this design (total %i antennas)."%(ant,self.config['n_ants']))
         xfpga_n  = ant/self.config['n_ants_per_xaui']/self.config['n_xaui_ports_per_xfpga']
         ffpga_n  = ant/self.config['n_ants_per_xaui']/self.config['n_xaui_ports_per_ffpga']
         xxaui_n  = ant/self.config['n_ants_per_xaui']%self.config['n_xaui_ports_per_xfpga']
         fxaui_n  = ant/self.config['n_ants_per_xaui']%self.config['n_xaui_ports_per_ffpga']
-        feng_input = ant%self.config['n_ants_per_xaui'] + self.config['pol_map'][pol]
+        feng_input = ant%(self.config['f_per_fpga'])*self.config['n_pols'] + self.config['pol_map'][pol]
         return (ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_input)
 
     def set_udp_exchange_port(self):
@@ -460,10 +481,10 @@ class Correlator:
                 fpga.tap_start('gbe_out%i'%x,mac,ip,port)
 
     def enable_udp_output(self):
-        self.xwrite_all_xeng_ctrl(gbe_out_enable=True)
+        self.xxeng_ctrl_set_all(gbe_out_enable=True)
 
     def disable_udp_output(self):
-        self.xwrite_all_xeng_ctrl(gbe_out_enable=False)
+        self.xxeng_ctrl_set_all(gbe_out_enable=False)
 
     def deconfig_roach_10gbe_ports(self):
         """Stops tgtap drivers for the X engines."""
@@ -533,6 +554,67 @@ class Correlator:
                     bram_dmp[bram].append(fpga.read(bram_path,(bram_sizes[f]+1)*4))
         return bram_dmp
 
+    def fsnap_all(self,dev_name,brams,man_trig=False,man_valid=False,wait_period=1,offset=-1,circular_capture=False):
+        """Triggers and retrieves data from the a snap block device on all the F engines. Depending on the hardware capabilities, it can optionally capture with an offset. The actual captured length and starting offset is returned with the dictionary of data for each FPGA (useful if you've done a circular capture and can't calculate this yourself).\n
+        \tdev_name: string, name of the snap block.\n
+        \tman_trig: boolean, Trigger the snap block manually.\n
+        \toffset: integer, wait this number of valids before beginning capture. Set to negative value if your hardware doesn't support this or the circular capture function.\n
+        \tcircular_capture: boolean, Enable the circular capture function.\n
+        \twait_period: integer, wait this number of seconds between triggering and trying to read-back the data.\n
+        \tbrams: list, names of the bram components.\n
+        \tRETURNS: dictionary with keywords: \n
+        \t\tlengths: list of integers matching number of valids captured off each fpga.\n
+        \t\toffset: optional (depending on snap block version) list of number of valids elapsed since last trigger on each fpga.
+        \t\t{brams}: list of data from each fpga for corresponding bram.\n
+        """
+        if offset >= 0:
+            self.fwrite_int_all(dev_name+'_trig_offset',offset)
+            #print 'Capturing from snap offset %i'%offset
+
+        #print 'Triggering Capture...',
+        self.fwrite_int_all(dev_name+'_ctrl',(0 + (man_trig<<1) + (man_valid<<2) + (circular_capture<<3)))
+        self.fwrite_int_all(dev_name+'_ctrl',(1 + (man_trig<<1) + (man_valid<<2) + (circular_capture<<3)))
+
+        done=False
+        start_time=time.time()
+        while not (done and (offset>0 or circular_capture)) and ((time.time()-start_time)<wait_period): 
+            addr      = self.fread_uint_all(dev_name+'_addr')
+            done_list = [not bool(i & 0x80000000) for i in addr]
+            if (done_list == [True for i in self.fsrvs]): done=True
+        bram_sizes=[i&0x7fffffff for i in self.fread_uint_all(dev_name+'_addr')]
+        bram_dmp={'lengths':numpy.add(bram_sizes,1)}
+        bram_dmp['offsets']=[0 for f in self.ffpgas]
+        #print 'Addr+1:',bram_dmp['lengths']
+        for f,fpga in enumerate(self.ffpgas):
+            if (bram_sizes[f] != fpga.read_uint(dev_name+'_addr')&0x7fffffff) or bram_sizes[f]==0:
+                #if address is still changing, then the snap block didn't finish capturing. we return empty.  
+                print "Looks like snap block on %s didn't finish."%self.fsrvs[f]
+                bram_dmp['lengths'][f]=0
+                bram_dmp['offsets'][f]=0
+                bram_sizes[f]=0
+
+        if (circular_capture or (offset>=0)) and not man_trig:
+            bram_dmp['offsets']=numpy.subtract(numpy.add(self.fread_uint_all(dev_name+'_tr_en_cnt'),offset),bram_sizes)
+            #print 'Valids since offset trig:',self.read_uint_all(dev_name+'_tr_en_cnt')
+            #print 'offsets:',bram_dmp['offsets']
+        else: bram_dmp['offsets']=[0 for f in self.ffpgas]
+    
+        for f,fpga in enumerate(self.ffpgas):
+            if (bram_dmp['offsets'][f] < 0):  
+                raise RuntimeError('SNAP block hardware or logic failure happened. Returning no data.')
+                bram_dmp['lengths'][f]=0
+                bram_dmp['offsets'][f]=0
+                bram_sizes[f]=0
+
+        for b,bram in enumerate(brams):
+            bram_path = dev_name+'_'+bram
+            bram_dmp[bram]=[]
+            for f,fpga in enumerate(self.ffpgas):
+                if (bram_sizes[f] == 0): 
+                    bram_dmp[bram].append([])
+                else: 
+                    bram_dmp[bram].append(fpga.read(bram_path,(bram_sizes[f]+1)*4))
+        return bram_dmp
 
     def check_xaui_sync(self,verbose=False):
         """Checks if all F engines are in sync by examining mcnts at sync of incomming XAUI streams. \n
@@ -577,6 +659,7 @@ class Correlator:
 
     def rf_atten_set(self,ant,pol,level=-1):
         """Enables the RF switch and configures the RF attenuators on KATADC boards. pol is ['x'|'y']"""
+        #tested ok corr-0.5.0 2010-07-19
         #RF switch is in MSb.
         if self.config['adc_type'] != 'katadc' : raise RuntimeError("Unsupported ADC type of %s. Only katadc is supported."%self.config['adc_type'])
         ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_input = self.get_ant_location(ant,pol)
@@ -584,8 +667,29 @@ class Correlator:
             level = self.config['rf_att_%i%c'%(ant,pol)] 
         self.ffpgas[ffpga_n].write_int('adc_ctrl%i'%feng_input,(1<<31)+level)
 
+    def rf_status_get(self,ant,pol):
+        """Grabs the current value of the RF attenuators and RF switch state for KATADC boards. return (enabled,attenuation) pol is ['x'|'y']"""
+        #tested ok corr-0.5.0 2010-07-19
+        #RF switch is in MSb.
+        if self.config['adc_type'] != 'katadc' : raise RuntimeError("Unsupported ADC type of %s. Only katadc is supported."%self.config['adc_type'])
+        ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_input = self.get_ant_location(ant,pol)
+        value = self.ffpgas[ffpga_n].read_uint('adc_ctrl%i'%feng_input)
+        return (bool(value&(1<<31)),value&0x3f)
+
+    def rf_atten_get_all(self):
+        """Grabs the current value of the RF attenuators on all KATADC boards."""
+        #RF switch is in MSb.
+        #tested ok corr-0.5.0 2010-07-19
+        if self.config['adc_type'] != 'katadc' : raise RuntimeError("Unsupported ADC type of %s. Only katadc is supported."%self.config['adc_type'])
+        rv={}
+        for ant in range(self.config['n_ants']):
+            for pol in self.config['pols']:
+                rv[(ant,pol)]=self.rf_status_get(ant,pol)
+        return rv
+
     def rf_atten_set_all(self,level=-1):
         """Sets the RF gain configuration of all inputs to "level". If no level is given, or value is negative, use the defaults from the config file."""
+        #tested ok corr-0.5.0 2010-07-19
         if self.config['adc_type'] != 'katadc' : raise RuntimeError("Unsupported ADC type of %s. Only katadc is supported."%self.config['adc_type'])
         for ant in range(self.config['n_ants']):
             for pol in self.config['pols']:
@@ -596,8 +700,14 @@ class Correlator:
         #RF switch is in MSb.
         if self.config['adc_type'] != 'katadc' : raise RuntimeError("Unsupported ADC type of %s. Only katadc is supported at this time."%self.config['adc_type'])
         ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_input = self.get_ant_location(ant,pol)
-        level=self.ffpgas[ffpga_n].read_uint('adc_ctrl%i'%feng_input)&(0x8fffffff)
-        self.ffpgas[ffpga_n].write_int('adc_ctrl%i'%feng_input,(1<<31)+level)
+        self.ffpgas[ffpga_n].write_int('adc_ctrl%i'%feng_input,self.ffpgas[ffpga_n].read_uint('adc_ctrl%i'%feng_input)&0x7fffffff)
+
+    def rf_enable(self,ant,pol):
+        """Enable the RF switch on KATADC boards. pol is ['x'|'y']"""
+        #RF switch is in MSb.
+        if self.config['adc_type'] != 'katadc' : raise RuntimeError("Unsupported ADC type of %s. Only katadc is supported at this time."%self.config['adc_type'])
+        ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_input = self.get_ant_location(ant,pol)
+        self.ffpgas[ffpga_n].write_int('adc_ctrl%i'%feng_input,self.ffpgas[ffpga_n].read_uint('adc_ctrl%i'%feng_input)|0x80000000)
 
     def get_default_eq(self,ant,pol):
         "Fetches the default equalisation configuration from the config file and returns a list of the coefficients for a given input. pol is ['x'|'y']" 
@@ -661,7 +771,7 @@ class Correlator:
         
         fpga.write(register_name,coeff_str)
 
-    def get_adc_amplitudes(self,ants=[]):
+    def adc_amplitudes_get(self,ants=[]):
         """Gets the ADC RMS amplitudes from the F engines. If no antennas are specified, return all."""
         if ants == []:
             ants = range(self.config['n_ants'])
@@ -670,10 +780,11 @@ class Correlator:
             for pol in self.config['pols']:
                 ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_input = self.get_ant_location(ant,pol)
                 rv[(ant,pol)]={}
-                rv[(ant,pol)]['raw']=self.ffpgas[ffpga_n].read_uint('adc_levels%i'%(feng_input))
+                rv[(ant,pol)]['raw']=self.ffpgas[ffpga_n].read_uint('adc_sum_sq%i'%(feng_input))
                 rv[(ant,pol)]['rms']=numpy.sqrt(rv[(ant,pol)]['raw']/self.config['adc_levels_acc_len'])/(2**self.config['adc_bits'])
                 if rv[(ant,pol)]['rms'] == 0: rv[(ant,pol)]['bits']=0
                 else: rv[(ant,pol)]['bits'] = numpy.log2(rv[(ant,pol)]['rms'] * (2**(self.config['adc_bits'])))
+        return rv
 
     def issue_spead_metadata(self):
         """ Issues the SPEAD metadata packets containing the payload and options descriptors and unpack sequences."""

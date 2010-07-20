@@ -46,37 +46,32 @@ lh=corr.log_handlers.DebugLogHandler()
 try:
     print 'Connecting...',
     c=corr.corr_functions.Correlator(args[0],lh)
-    for s,server in enumerate(c.xsrvs): c.loggers[s].setLevel(10)
+    for s,server in enumerate(c.fsrvs): c.floggers[s].setLevel(10)
     print 'done.'
 
-    servers = c.fsrvs
-    fpgas = c.ffpgas
-    n_ants = c.config['n_ants']
-    n_ants_per_xaui = c.config['n_ants_per_xaui']
-    n_xaui_ports_per_fpga = c.config['n_xaui_ports_per_fpga']
-    adc_bits = c.config['adc_bits']
-    adc_levels_acc_len = c.config['adc_levels_acc_len']
-    pols = c.config['pols']
-
-    while(1):
-        amps=c.get_adc_amplitudes()
+    while(True):
+        amps=c.adc_amplitudes_get()
+        stats=c.feng_status_get_all()
         time.sleep(1)
         #Move cursor home:
         print '%c[H'%chr(27)
         #clear the screen:
         print '%c[2J'%chr(27)
-        print 'IBOB: ADC0 is bottom (furthest from power port), ADC1 is top (closest to power port). ROACH: ADC0 is right, ADC1 is left (when viewed from front)'
+        print 'IBOB: ADC0 is bottom (furthest from power port), ADC1 is top (closest to power port).\n\rROACH: ADC0 is right, ADC1 is left (when viewed from front).'
         print 'ADC input amplitudes averaged %i times.'%c.config['adc_levels_acc_len']
         print '------------------------------------------------'
-        for ant,pol in amps:
-            ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_input = self.get_ant_location(ant,pol)
-            print 'Ant %i pol %s (%s input %i): %.3f (%2.2f bits used)'%(ant,pol,c.srvs[ffpga_n],feng_input, amps[(ant,pol)]['rms'],amps[(ant,pol)]['bits'])
+        for ant,pol in sorted(amps):
+            ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_input = c.get_ant_location(ant,pol)
+            print 'Ant %i pol %s (%s input %i): %.3f (%2.2f bits used)'%(ant,pol,c.fsrvs[ffpga_n],feng_input, amps[(ant,pol)]['rms'],amps[(ant,pol)]['bits']),
+            if stats[(ant,pol)]['adc_overrange']: print 'ADC OVERRANGE'
+            else: print ''
+            
     print '--------------------'
 
 except KeyboardInterrupt:
     exit_clean()
 except:
-    print ''
+    exit_fail()
 
 print 'Done with all'
 exit_clean()
