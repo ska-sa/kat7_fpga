@@ -122,11 +122,11 @@ class CorrConf:
         if self.config['adc_type'] == 'katadc':
             for ant in range(self.config['n_ants']):
                 for pol in ['x','y']:
-                    ant_rf_gain = self.get_line('equalisation','rf_att_%i%c'%(ant,pol))
+                    ant_rf_gain = self.get_line('equalisation','rf_gain_%i%c'%(ant,pol))
                     if (ant_rf_gain):
-                        self.config['rf_att_%i%c'%(ant,pol)]=int(ant_rf_gain)
+                        self.config['rf_gain_%i%c'%(ant,pol)]=int(ant_rf_gain)
                     else:
-                        raise RuntimeError('ERR rf_att_%i%c'%(ant,pol))
+                        raise RuntimeError('ERR rf_gain_%i%c'%(ant,pol))
 
         if self.config['eq_default'] == 'poly':
             for ant in range(self.config['n_ants']):

@@ -8,6 +8,7 @@ UNDER CONSTRUCTION
 Author: Jason Manley\n
 Revisions:\n
 2010-06-28  JRM Port to use ROACH based F and X engines.
+                Changed naming convention for function calls.
 2010-04-02  JCL Removed base_ant0 software register from Xengines, moved it to Fengines, and renamed it to use ibob_addr0 and ibob_data0.  
                 New function write_ibob().
                 Check for VACC errors.
@@ -122,11 +123,12 @@ class Correlator:
         value = gbe_out_enable<<16 | loopback_mux_rst<<10 | gbe_disable<<9 | cnt_rst<<8 | gbe_rst<<15 | vacc_rst<<0
         self.xwrite_int_all('ctrl',value)
 
-    def set_fft_shift(self,fft_shift=-1):
+    def fft_shift_set(self,fft_shift=-1):
         """Configure the FFT on all F engines to the specified schedule. If not specified, default to schedule listed in config file."""
+        #tested ok corr-0.5.0 2010-07-20
         if fft_shift <0:
             fft_shift = self.config['fft_shift']
-        for ant in range(f_per_fpga):
+        for ant in range(self.config['f_per_fpga']*self.config['n_pols']):
             self.fwrite_int_all("fft_shift%i"%ant,fft_shift)
 
     def feng_status_get_all(self):
@@ -166,7 +168,7 @@ class Correlator:
         for fbrd,fsrv in enumerate(self.fsrvs):
             if verbose: 
                 if all_values[fbrd] == 0: print '\tNo PPS detected on %s.'%fsrv
-                else:   print "\tClocks between PPS pulses on %s is %i, where mode is %i."%(fsrv,all_values[fbrd], modalmean)
+                else:   print "\tClocks between PPS pulses on %s is %i, where modal mean is %i."%(fsrv,all_values[fbrd], modalmean)
             if (all_values[fbrd] > (modalmean+2)) or (all_values[fbrd] < (modalmean -2)) or (all_values[fbrd]==0):
                 rv=False
         return rv
@@ -214,6 +216,10 @@ class Correlator:
         """Resets all error counters on the X engines."""
         self.xeng_ctrl_set_all(cnt_rst=False)
         self.xeng_ctrl_set_all(cnt_rst=True)
+        self.xeng_ctrl_set_all(cnt_rst=False)
+        self.feng_ctrl_set_all(clr_status=False)
+        self.feng_ctrl_set_all(clr_status=True)
+        self.feng_ctrl_set_all(clr_status=False)
 
     def xeng_clks_get(self):
         """Returns the approximate clock rate of each X engine FPGA in MHz."""
@@ -406,16 +412,16 @@ class Correlator:
                 for xeng in range(self.config['x_per_fpga']):
                     self.xwrite_int_all('xeng_tvg%i_tv%i'%(xeng,i),v)
 
-    def set_acc_len(self,acc_len=-1):
+    def acc_len_set(self,acc_len=-1):
         """Set the Accumulation Length (in # of spectrum accumulations). If not specified, get the config from the config file."""
         if acc_len<0: acc_len=self.config['acc_len']
         self.xwrite_int_all('acc_len', acc_len)
 
-    def set_ant_index(self):
+    def ant_index_set(self):
         """Sets the F engine boards' antenna indices. (Numbers the base_ant software register.)"""
         ant = 0
         for f,fpga in enumerate(self.ffpgas):
-            fpga.write_int('base_ant', ant)
+            fpga.write_int('ant_base', ant)
             ant += self.config['f_per_feng']
 
     def get_ant_location(self, ant, pol='x'):
@@ -430,17 +436,9 @@ class Correlator:
         feng_input = ant%(self.config['f_per_fpga'])*self.config['n_pols'] + self.config['pol_map'][pol]
         return (ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_input)
 
-    def set_udp_exchange_port(self):
+    def udp_exchange_port_set(self):
         """Set the UDP TX port for internal correlator data exchange."""
         self.xwrite_int_all('gbe_port', data_port)
-
-# THIS FUNCTION SHOULD NOT BE REQUIRED WITH DAVE'S UPCOMING 10GBE CORE MODS
-#    def set_udp_exchange_ip(self):
-#        """Assign an IP address to each XAUI port's associated 10GbE core."""
-#        for xaui in range(self.config['n_xaui_ports_per_xfpga']):
-#            for f,fpga in enumerate(self.xfpgas):
-#                ip = gbe_start_ip + f + xaui*(len(self.xfpgas))
-#                fpga.xwrite_int('gbe_ip%i'%xaui, ip)
 
     def config_roach_10gbe_ports(self):
         """Configures 10GbE ports on roach X engines for correlator data exchange using TGTAP."""
@@ -450,6 +448,9 @@ class Correlator:
                 start_port=self.config['10gbe_port']
                 mac,ip,port=self.get_roach_gbe_conf(start_addr,(f*self.config['n_xaui_ports_per_xfpga']+x),start_port)
                 fpga.tap_start('gbe%i'%x,'gbe%i'%x,mac,ip,port)
+                # THIS LINE SHOULD NOT BE REQUIRED WITH DAVE'S UPCOMING 10GBE CORE MODS
+                # Assign an IP address to each XAUI port's associated 10GbE core.
+                fpga.write_int('gbe_ip%i'%x, ip)
                 
     def config_roach_10gbe_ports_static(self):
         """STATICALLY configures 10GbE ports on roach X engines for correlator data exchange. Will not work with 10GbE output (we don't know the receiving computer's MAC)."""
@@ -466,9 +467,12 @@ class Correlator:
             for x in range(self.config['n_xaui_ports_per_xfpga']):
                 mac,ip,port=self.get_roach_gbe_conf(start_addr,(f*self.config['n_xaui_ports_per_xfpga']+x),start_port)
                 fpga.config_10gbe_core('gbe%i'%x,mac,ip,port,arp_table)
-
+                # THIS LINE SHOULD NOT BE REQUIRED WITH DAVE'S UPCOMING 10GBE CORE MODS
+                # Assign an IP address to each XAUI port's associated 10GbE core.
+                fpga.write_int('gbe_ip%i'%x, ip)
 
     def config_udp_output(self):
+        """Configures the X engine 10GbE output cores."""
         self.xwrite_int_all('gbe_out_ip_addr',self.config['rx_udp_ip'])
         self.xwrite_int_all('gbe_out_port',self.config['rx_udp_port'])
         self.xwrite_int_all('gbe_out_pkt_len',self.config['rx_pkt_payload_len'])
@@ -657,27 +661,28 @@ class Correlator:
                 if verbose: print 'Sync check failed on %s, port %i with error of %i.'%(self.xservers[f],x,mcnts[n_xaui]['mcnt']-mcnts['modalmean'])
         return rv
 
-    def rf_atten_set(self,ant,pol,level=-1):
-        """Enables the RF switch and configures the RF attenuators on KATADC boards. pol is ['x'|'y']"""
+    def rf_gain_set(self,ant,pol,gain=''):
+        """Enables the RF switch and configures the RF attenuators on KATADC boards. pol is ['x'|'y']. katadc's valid range is -11.5 to 20dB."""
         #tested ok corr-0.5.0 2010-07-19
         #RF switch is in MSb.
         if self.config['adc_type'] != 'katadc' : raise RuntimeError("Unsupported ADC type of %s. Only katadc is supported."%self.config['adc_type'])
         ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_input = self.get_ant_location(ant,pol)
-        if level <0:
-            level = self.config['rf_att_%i%c'%(ant,pol)] 
-        self.ffpgas[ffpga_n].write_int('adc_ctrl%i'%feng_input,(1<<31)+level)
+        if gain == '':
+            gain = self.config['rf_gain_%i%c'%(ant,pol)] 
+        if gain > 20 or gain < -11.5: raise RuntimeError("Invalid gain setting of %i. Valid range for KATADC is -11.5 to +20")
+        self.ffpgas[ffpga_n].write_int('adc_ctrl%i'%feng_input,(1<<31)+int((20-gain)*2))
 
     def rf_status_get(self,ant,pol):
-        """Grabs the current value of the RF attenuators and RF switch state for KATADC boards. return (enabled,attenuation) pol is ['x'|'y']"""
+        """Grabs the current value of the RF attenuators and RF switch state for KATADC boards. return (enabled,gain in dB) pol is ['x'|'y']"""
         #tested ok corr-0.5.0 2010-07-19
         #RF switch is in MSb.
         if self.config['adc_type'] != 'katadc' : raise RuntimeError("Unsupported ADC type of %s. Only katadc is supported."%self.config['adc_type'])
         ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_input = self.get_ant_location(ant,pol)
         value = self.ffpgas[ffpga_n].read_uint('adc_ctrl%i'%feng_input)
-        return (bool(value&(1<<31)),value&0x3f)
+        return (bool(value&(1<<31)),20.0-(value&0x3f)*0.5)
 
-    def rf_atten_get_all(self):
-        """Grabs the current value of the RF attenuators on all KATADC boards."""
+    def rf_status_get_all(self):
+        """Grabs the current status of the RF chain on all KATADC boards."""
         #RF switch is in MSb.
         #tested ok corr-0.5.0 2010-07-19
         if self.config['adc_type'] != 'katadc' : raise RuntimeError("Unsupported ADC type of %s. Only katadc is supported."%self.config['adc_type'])
@@ -687,13 +692,13 @@ class Correlator:
                 rv[(ant,pol)]=self.rf_status_get(ant,pol)
         return rv
 
-    def rf_atten_set_all(self,level=-1):
-        """Sets the RF gain configuration of all inputs to "level". If no level is given, or value is negative, use the defaults from the config file."""
+    def rf_gain_set_all(self,gain=''):
+        """Sets the RF gain configuration of all inputs to "gain". If no level is given, use the defaults from the config file."""
         #tested ok corr-0.5.0 2010-07-19
         if self.config['adc_type'] != 'katadc' : raise RuntimeError("Unsupported ADC type of %s. Only katadc is supported."%self.config['adc_type'])
         for ant in range(self.config['n_ants']):
             for pol in self.config['pols']:
-                self.rf_atten_set(ant,pol,level)
+                self.rf_gain_set(ant,pol,gain)
 
     def rf_disable(self,ant,pol):
         """Disable the RF switch on KATADC boards. pol is ['x'|'y']"""
@@ -708,6 +713,14 @@ class Correlator:
         if self.config['adc_type'] != 'katadc' : raise RuntimeError("Unsupported ADC type of %s. Only katadc is supported at this time."%self.config['adc_type'])
         ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_input = self.get_ant_location(ant,pol)
         self.ffpgas[ffpga_n].write_int('adc_ctrl%i'%feng_input,self.ffpgas[ffpga_n].read_uint('adc_ctrl%i'%feng_input)|0x80000000)
+
+    def eq_set_all(self,verbose=False,init_poly=[]):
+        """Initialise all connected Fengines' EQs to given polynomial. If no polynomial is given, use defaults from config file."""
+        for ant in range(self.config['n_ants']):
+            for pol in self.config['pols']:
+                eq_coeffs = numpy.polyval(init_poly, range(self.config['n_chans']))[self.config['eq_decimation']/2::self.config['eq_decimation']]
+                eq_coeffs = [int(coeff) for coeff in eq_coeffs]
+                self.eq_spectrum_set(ant=ant,pol=pol,verbose=verbose,init_coeffs=eq_coeffs)
 
     def get_default_eq(self,ant,pol):
         "Fetches the default equalisation configuration from the config file and returns a list of the coefficients for a given input. pol is ['x'|'y']" 
@@ -724,15 +737,7 @@ class Correlator:
         if len(equalisation) != n_coeffs: raise RuntimeError("Something's wrong. I have %i eq coefficients when I should have %i."%(len(equalisation),n_coeffs))
         return equalisation
 
-    def eq_set_all(self,verbose_level=0,init_poly=[]):
-        """Initialise all connected Fengines' EQs to given polynomial. If no polynomial is given, use defaults from config file."""
-        for ant in range(self.config['n_ants']):
-            for pol in self.config['pols']:
-                eq_coeffs = numpy.polyval(init_poly, range(self.config['n_chans']))[self.config['eq_decimation']/2::self.config['eq_decimation']]
-                eq_coeffs = [int(coeff) for coeff in eq_coeffs]
-                self.eq_spectrum_set(ant=ant,pol=pol,verbose_level=verbose_level,init_coeffs=eq_coeffs)
-
-    def eq_spectrum_set(self,ant,pol,verbose_level=0,init_coeffs=[]):
+    def eq_spectrum_set(self,ant,pol,verbose=False,init_coeffs=[]):
         """Set a given antenna and polarisation equaliser to given co-efficients. pol is 'x' or 'y'. ant is integer in range n_ants. Assumes equaliser of 16 bits. init_coeffs is list of length n_chans/decimation_factor."""
         fpga=self.ffpgas[ffpga_n]
         pol_n = self.config['pol_map'][pol]
@@ -746,11 +751,11 @@ class Correlator:
             coeffs = init_coeffs
         else: raise RuntimeError ('You specified %i coefficients, but there are %i EQ coefficients in this design.'%(len(init_coeffs),n_coeffs))
 
-        if verbose_level>0:
+        if verbose:
             print 'Writing new coefficient values to config file...'
         self.config.write('equalisation','eq_coeff_%i%c'%(ant,pol),coeffs)
 
-        if verbose_level>0:
+        if verbose:
             for term,coeff in enumerate(coeffs):
                 print '''Initialising EQ for antenna %i%c, input %i on %s (register %s)'s index %i to'''%(ant,pol,feng_input,self.fsrvs[ffpga_n],register_name,term),
                 if term==(len(coeffs)-1): print '%i...'%(coeff),
@@ -766,9 +771,6 @@ class Correlator:
             coeffs    = numpy.array(coeffs,dtype=numpy.complex128)
             coeff_str = struct.pack('>%iH'%(2*n_coeffs),coeffs.view(dtype=numpy.float64))
 
-        if (verbose_level > 1):
-            print 'About to set EQ addr %i to %f.'%(chan,gain)
-        
         fpga.write(register_name,coeff_str)
 
     def adc_amplitudes_get(self,ants=[]):

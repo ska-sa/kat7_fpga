@@ -5,6 +5,7 @@ Can be left running (assuming sufficient bandwidth) and will continuously check 
 
 Author: Jason Manley\n
 Revisions:\n
+2010-07-20  JRM Mods to use ROACH based F engines.\n 
 2010-04-02  JCL Removed base_ant0 software register from Xengines, moved it to Fengines, and renamed it to use ibob_addr0 and ibob_data0.  Use function write_ibob() from corr_functions.py to set antenna offsets on Fengines
 2010-01-06  JRM Added output control and self-check after primary init.
 2009-12-02  JRM Re-enabled acc_len config.\n
@@ -88,7 +89,7 @@ try:
         print 'done.'
 
         # PROGRAM THE DEVICES
-        print ''' Programming the FPGAs with %s...'''%c.config['bitstream'],
+        print ''' Programming the Fengines with %s and the Xengines with %s...'''%(c.config['fbitstream'],c.config['xbitstream']),
         sys.stdout.flush()
         c.prog_all()
         print 'done.'
@@ -97,7 +98,7 @@ try:
     # Disable 10GbE cores until the network's been setup and ARP tables have settled. Need to do a reset here too to flush buffers in the core.
     print('\n Pausing 10GbE data exchange, resetting the 10GbE cores and clearing X engine TVGs...'),
     sys.stdout.flush()
-    c.write_all_xeng_ctrl(gbe_disable=True, gbe_rst=True)
+    c.xeng_ctrl_set_all(gbe_disable=True, gbe_rst=True)
     print 'done.'
 
     if opts.prog_10gbe_cores:
@@ -105,63 +106,36 @@ try:
         print(''' Configuring the 10GbE cores...'''),
         sys.stdout.flush()
         c.config_roach_10gbe_ports()
-        time.sleep(20)
+        time.sleep(10)
         #lh.printMessages()
         print 'done'
 
-    # TURN OFF ANY TVGs
-    print ' Clearing F engine TVG register...',
-    sys.stdout.flush()
-    c.write_all_feng_ctrl()
-    print 'done'
-
-    # ARM THE BEEs
-    print ''' Syncing the iBOBs, resetting F engine TVGs & setting FFT shift...''',
+    print ''' Syncing the F engines...'''
     sys.stdout.flush()
     trig_time=c.arm()
-    print 'Armed. Expect trigg at %s local.'%(time.strftime('%H:%M:%S',time.localtime(trig_time))),
-    time_skt=socket.socket(type=socket.SOCK_DGRAM)
-    pkt_str=struct.pack('>HHHHQ',0x5453,3,0,1,trig_time)
-    time_skt.sendto(pkt_str,(c.config['rx_udp_ip_str'],c.config['rx_udp_port']))
-    time_skt.close()
-    print 'Pkt sent.'
+    print 'Armed. Expect trigg at %s local (%s UTC).'%(time.strftime('%H:%M:%S',time.localtime(trig_time)),time.strftime('%H:%M:%S',time.gmtime(trig_time)))
+    #send a SPEAD resync packet:
+    #time_skt=socket.socket(type=socket.SOCK_DGRAM)
+    #pkt_str=struct.pack('>HHHHQ',0x5453,3,0,1,trig_time)
+    #time_skt.sendto(pkt_str,(c.config['rx_udp_ip_str'],c.config['rx_udp_port']))
+    #time_skt.close()
+    #print 'Pkt sent.'
 
-    # Set the Accumulation Length (number of vectors to accumulate)
     print (''' Setting the accumulation length to %i (%2.2f seconds)...'''%(c.config['acc_len'],c.config['int_time'])),
     sys.stdout.flush()
-    c.set_acc_len()
+    c.acc_len_set()
     print 'done'
 
-    # Set antenna indices
     print(''' Setting the antenna indices...'''),
     sys.stdout.flush()
-    ant = 0
-    #Set the all the XAUI ports to crazy values, so that unused ports will show ridiculous antenna values if you've cabled it up wrong.
-    for x in range(c.config['n_xaui_ports_per_fpga']):
-        c.write_all_ibobs(c.config['antenna_offset_addr'],((2**32)-1))
-    #now set things properly for the used ports:
-    for x in range(c.config['n_xaui_ports_per_fpga']):
-        for f in range(c.config['n_ants']/c.config['n_ants_per_xaui']/c.config['n_xaui_ports_per_fpga']):
-            c.write_ibob(f,x,c.config['antenna_offset_addr'],ant)
-            print('%i'%ant),
-            sys.stdout.flush()
-            ant += c.config['n_ants_per_xaui']
+    c.ant_index_set()
     print ('''done''')
 
     # Set UDP TX data port
     print (''' Setting the UDP TX data port to %i...'''%(c.config['10gbe_port'])),
     sys.stdout.flush()
-    c.write_int_all('gbe_port', c.config['10gbe_port'])
+    c.udp_exchange_port_set()
     print 'done'
-
-    # Set UDP TX/RX ip
-    print (''' Setting the 10GbE IP addresses...'''),
-    sys.stdout.flush()
-    for xaui in range(c.config['n_xaui_ports_per_fpga']):
-        for f,fpga in enumerate(c.fpgas):
-            ip = c.config['10gbe_ip'] + f + xaui*(len(c.fpgas))
-            fpga.write_int('gbe_ip%i'%xaui, ip)
-    print ('''done''')
 
     if opts.prog_10gbe_cores:
         print('''\nWaiting for ARP to complete...'''),
@@ -181,10 +155,10 @@ try:
         #print  'done'
     
     else:
+        """Even if we aren't configuring the 10GbE cores, we still need to setup these registers, because they're interrogated by cn_tx.py"""
         for x in range(c.config['x_per_fpga']):
-            for f,fpga in enumerate(c.fpgas):
+            for f,fpga in enumerate(c.xfpgas):
                 fpga.write_int('inst_xeng_id%i'%x,x*len(c.fpgas)+f)
-
 
     #print('Resetting 10GbE cores...'),
     #sys.stdout.flush()
@@ -195,21 +169,21 @@ try:
     # Restart 10GbE data exchange (had to wait until the network's been setup and ARP tables have settled).
     print(' Starting 10GbE data exchange...'),
     sys.stdout.flush()
-    c.write_all_xeng_ctrl(gbe_disable=False)
+    c.xeng_ctrl_set_all(gbe_disable=False)
     print 'done.'
     
     print ' Configuring EQ...',
     sys.stdout.flush()
     if opts.prog_eq:
-        c.ibob_eq_init()
+        c.eq_set_all()
         print 'done'
     else: print 'skipped.'
 
     print(' Flushing loopback muxs...'),
     sys.stdout.flush()
-    c.write_all_xeng_ctrl(loopback_mux_rst=True,gbe_disable=True)
+    c.xeng_ctrl_set_all(loopback_mux_rst=True,gbe_disable=True)
     time.sleep(2)
-    c.write_all_xeng_ctrl(loopback_mux_rst=False,gbe_disable=False)
+    c.xeng_ctrl_set_all(loopback_mux_rst=False,gbe_disable=False)
     print 'done.'
 
     print '\n================================'
