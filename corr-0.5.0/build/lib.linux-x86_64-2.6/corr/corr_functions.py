@@ -168,7 +168,7 @@ class Correlator:
         for fbrd,fsrv in enumerate(self.fsrvs):
             if verbose: 
                 if all_values[fbrd] == 0: print '\tNo PPS detected on %s.'%fsrv
-                else:   print "\tClocks between PPS pulses on %s is %i, where mode is %i."%(fsrv,all_values[fbrd], modalmean)
+                else:   print "\tClocks between PPS pulses on %s is %i, where modal mean is %i."%(fsrv,all_values[fbrd], modalmean)
             if (all_values[fbrd] > (modalmean+2)) or (all_values[fbrd] < (modalmean -2)) or (all_values[fbrd]==0):
                 rv=False
         return rv
@@ -213,7 +213,7 @@ class Correlator:
         return (mac,ip,port)
 
     def rst_cnt(self):
-        """Resets all error counters on the X engines."""
+        """Resets all error counters on all connected boards."""
         self.xeng_ctrl_set_all(cnt_rst=False)
         self.xeng_ctrl_set_all(cnt_rst=True)
         self.xeng_ctrl_set_all(cnt_rst=False)
@@ -422,7 +422,7 @@ class Correlator:
         ant = 0
         for f,fpga in enumerate(self.ffpgas):
             fpga.write_int('ant_base', ant)
-            ant += self.config['f_per_feng']
+            ant += self.config['f_per_fpga']
 
     def get_ant_location(self, ant, pol='x'):
         " Returns the (ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_input) location for a given antenna. Ant is integer, as are all returns."
@@ -714,6 +714,14 @@ class Correlator:
         ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_input = self.get_ant_location(ant,pol)
         self.ffpgas[ffpga_n].write_int('adc_ctrl%i'%feng_input,self.ffpgas[ffpga_n].read_uint('adc_ctrl%i'%feng_input)|0x80000000)
 
+    def eq_set_all(self,verbose=False,init_poly=[]):
+        """Initialise all connected Fengines' EQs to given polynomial. If no polynomial is given, use defaults from config file."""
+        for ant in range(self.config['n_ants']):
+            for pol in self.config['pols']:
+                eq_coeffs = numpy.polyval(init_poly, range(self.config['n_chans']))[self.config['eq_decimation']/2::self.config['eq_decimation']]
+                eq_coeffs = [int(coeff) for coeff in eq_coeffs]
+                self.eq_spectrum_set(ant=ant,pol=pol,verbose=verbose,init_coeffs=eq_coeffs)
+
     def get_default_eq(self,ant,pol):
         "Fetches the default equalisation configuration from the config file and returns a list of the coefficients for a given input. pol is ['x'|'y']" 
         n_coeffs = self.config['n_chans']/self.config['eq_decimation']
@@ -729,15 +737,7 @@ class Correlator:
         if len(equalisation) != n_coeffs: raise RuntimeError("Something's wrong. I have %i eq coefficients when I should have %i."%(len(equalisation),n_coeffs))
         return equalisation
 
-    def eq_set_all(self,verbose_level=0,init_poly=[]):
-        """Initialise all connected Fengines' EQs to given polynomial. If no polynomial is given, use defaults from config file."""
-        for ant in range(self.config['n_ants']):
-            for pol in self.config['pols']:
-                eq_coeffs = numpy.polyval(init_poly, range(self.config['n_chans']))[self.config['eq_decimation']/2::self.config['eq_decimation']]
-                eq_coeffs = [int(coeff) for coeff in eq_coeffs]
-                self.eq_spectrum_set(ant=ant,pol=pol,verbose_level=verbose_level,init_coeffs=eq_coeffs)
-
-    def eq_spectrum_set(self,ant,pol,verbose_level=0,init_coeffs=[]):
+    def eq_spectrum_set(self,ant,pol,verbose=False,init_coeffs=[]):
         """Set a given antenna and polarisation equaliser to given co-efficients. pol is 'x' or 'y'. ant is integer in range n_ants. Assumes equaliser of 16 bits. init_coeffs is list of length n_chans/decimation_factor."""
         fpga=self.ffpgas[ffpga_n]
         pol_n = self.config['pol_map'][pol]
@@ -751,11 +751,11 @@ class Correlator:
             coeffs = init_coeffs
         else: raise RuntimeError ('You specified %i coefficients, but there are %i EQ coefficients in this design.'%(len(init_coeffs),n_coeffs))
 
-        if verbose_level>0:
+        if verbose:
             print 'Writing new coefficient values to config file...'
         self.config.write('equalisation','eq_coeff_%i%c'%(ant,pol),coeffs)
 
-        if verbose_level>0:
+        if verbose:
             for term,coeff in enumerate(coeffs):
                 print '''Initialising EQ for antenna %i%c, input %i on %s (register %s)'s index %i to'''%(ant,pol,feng_input,self.fsrvs[ffpga_n],register_name,term),
                 if term==(len(coeffs)-1): print '%i...'%(coeff),
@@ -771,9 +771,6 @@ class Correlator:
             coeffs    = numpy.array(coeffs,dtype=numpy.complex128)
             coeff_str = struct.pack('>%iH'%(2*n_coeffs),coeffs.view(dtype=numpy.float64))
 
-        if (verbose_level > 1):
-            print 'About to set EQ addr %i to %f.'%(chan,gain)
-        
         fpga.write(register_name,coeff_str)
 
     def adc_amplitudes_get(self,ants=[]):
@@ -786,9 +783,11 @@ class Correlator:
                 ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_input = self.get_ant_location(ant,pol)
                 rv[(ant,pol)]={}
                 rv[(ant,pol)]['raw']=self.ffpgas[ffpga_n].read_uint('adc_sum_sq%i'%(feng_input))
-                rv[(ant,pol)]['rms']=numpy.sqrt(rv[(ant,pol)]['raw']/self.config['adc_levels_acc_len'])/(2**self.config['adc_bits'])
+                #here we have adc_bits -1 because the device outputs signed values in range -1 to +1, but rms range is 0 to 1(ok, sqrt(2)) so one bit is "wasted" on sign indication.
+                rv[(ant,pol)]['rms']=numpy.sqrt(rv[(ant,pol)]['raw']/float(self.config['adc_levels_acc_len']))/(2**(self.config['adc_bits']-1))
                 if rv[(ant,pol)]['rms'] == 0: rv[(ant,pol)]['bits']=0
                 else: rv[(ant,pol)]['bits'] = numpy.log2(rv[(ant,pol)]['rms'] * (2**(self.config['adc_bits'])))
+                if rv[(ant,pol)]['bits'] < 0: rv[(ant,pol)]['bits']=0
         return rv
 
     def issue_spead_metadata(self):

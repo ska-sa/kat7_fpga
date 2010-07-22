@@ -52,6 +52,7 @@ try:
     while(True):
         amps=c.adc_amplitudes_get()
         stats=c.feng_status_get_all()
+        c.rst_cnt()
         time.sleep(1)
         #Move cursor home:
         print '%c[H'%chr(27)
@@ -62,9 +63,10 @@ try:
         print '------------------------------------------------'
         for ant,pol in sorted(amps):
             ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_input = c.get_ant_location(ant,pol)
-            print 'Ant %i pol %s (%s input %i): %.3f (%2.2f bits used)'%(ant,pol,c.fsrvs[ffpga_n],feng_input, amps[(ant,pol)]['rms'],amps[(ant,pol)]['bits']),
-            if stats[(ant,pol)]['adc_overrange']: print 'ADC OVERRANGE'
-            else: print ''
+            print 'Ant %i pol %s (%s input %i): '%(ant,pol,c.fsrvs[ffpga_n],feng_input),
+
+            if stats[(ant,pol)]['adc_overrange']: print 'ADC OVERRANGE.'
+            else: print '%.3f (%2.2f bits used)'%(amps[(ant,pol)]['rms'],amps[(ant,pol)]['bits'])
             
     print '--------------------'
 
