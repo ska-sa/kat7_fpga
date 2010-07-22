@@ -213,7 +213,7 @@ class Correlator:
         return (mac,ip,port)
 
     def rst_cnt(self):
-        """Resets all error counters on the X engines."""
+        """Resets all error counters on all connected boards."""
         self.xeng_ctrl_set_all(cnt_rst=False)
         self.xeng_ctrl_set_all(cnt_rst=True)
         self.xeng_ctrl_set_all(cnt_rst=False)
@@ -422,7 +422,7 @@ class Correlator:
         ant = 0
         for f,fpga in enumerate(self.ffpgas):
             fpga.write_int('ant_base', ant)
-            ant += self.config['f_per_feng']
+            ant += self.config['f_per_fpga']
 
     def get_ant_location(self, ant, pol='x'):
         " Returns the (ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_input) location for a given antenna. Ant is integer, as are all returns."
@@ -783,9 +783,11 @@ class Correlator:
                 ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_input = self.get_ant_location(ant,pol)
                 rv[(ant,pol)]={}
                 rv[(ant,pol)]['raw']=self.ffpgas[ffpga_n].read_uint('adc_sum_sq%i'%(feng_input))
-                rv[(ant,pol)]['rms']=numpy.sqrt(rv[(ant,pol)]['raw']/self.config['adc_levels_acc_len'])/(2**self.config['adc_bits'])
+                #here we have adc_bits -1 because the device outputs signed values in range -1 to +1, but rms range is 0 to 1(ok, sqrt(2)) so one bit is "wasted" on sign indication.
+                rv[(ant,pol)]['rms']=numpy.sqrt(rv[(ant,pol)]['raw']/float(self.config['adc_levels_acc_len']))/(2**(self.config['adc_bits']-1))
                 if rv[(ant,pol)]['rms'] == 0: rv[(ant,pol)]['bits']=0
                 else: rv[(ant,pol)]['bits'] = numpy.log2(rv[(ant,pol)]['rms'] * (2**(self.config['adc_bits'])))
+                if rv[(ant,pol)]['bits'] < 0: rv[(ant,pol)]['bits']=0
         return rv
 
     def issue_spead_metadata(self):
