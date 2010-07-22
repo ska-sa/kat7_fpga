@@ -1,0 +1,142 @@
+#!/usr/bin/env python
+
+'''
+Plots a histogram of the ADC values from a specified antenna and pol.\n
+
+Revisions:
+1.1 PVP Initial.\n
+
+'''
+import matplotlib
+import time, corr, numpy, struct, sys, logging, pylab
+
+# what format are the snap names and how many are there per antenna
+snapName = 'adc_snap'
+snapCount = 2
+# what is the bram name inside the snap block
+bramName = 'bram'
+
+def exit_fail():
+    print 'FAILURE DETECTED. Log entries:\n', lh.printMessages()
+    print "Unexpected error:", sys.exc_info()
+    try:
+        c.disconnect_all()
+    except:
+        pass
+    exit()
+
+def exit_clean():
+    try:
+        c.disconnect_all()
+    except:
+        pass
+    exit()
+
+if __name__ == '__main__':
+    from optparse import OptionParser
+    p = OptionParser()
+    p.set_usage('corr_adc_histogram.py [options] CONFIG FILE')
+    p.add_option('-v', '--verbose', dest = 'verbose', action = 'store_true', help = 'Print raw output.')
+    p.add_option('-a', '--antenna', dest = 'antAndPol', action = 'store', help = 'Specify an antenna and pol for which to get ADC histograms. 3x will give pol x for antenna three. 27y will give pol y for antenna 27.')
+    p.set_description(__doc__)
+    opts, args = p.parse_args(sys.argv[1:])
+    if args==[]:
+        print 'Please specify a configuration file!\nExiting.'
+        exit()
+
+# parse the antenna argument passed to the program
+def parseAntenna(antArg):
+    import re
+    regExp = re.compile('^[0-9]{1,4}[xy]{0,2}$')
+    ants = antArg.lower().replace(' ','').split(',')
+    plotList = []
+    for ant in ants:
+        # is it valid?
+        if not regExp.search(ant):
+            print '\'' + ant + '\' is not a valid -a argument!\nExiting.'
+            exit()
+        antennaNumber = int(ant.replace('x', '').replace('y', ''))
+        if (ant.find('x') < 0) and (ant.find('y') < 0):
+            ant = ant + 'xy'
+        if ant.find('x') > 0:
+            plotList.append({'antenna':antennaNumber, 'pol':'x'})
+        if ant.find('y') > 0:
+            plotList.append({'antenna':antennaNumber, 'pol':'y'})
+    return plotList
+
+# the function that gets data given a required polarisation
+def getUnpackedData(requiredPol):
+    antLocation = c.get_ant_location(requiredPol['antenna'], requiredPol['pol'])
+    # which fpga do we need?
+    requiredFpga = antLocation[0]
+    # which ADC is it on that FPGA?
+    requiredFengInput = antLocation[4]
+    # get the data
+    packedData = c.ffpgas[requiredFpga].get_snap(snapName + str(requiredFengInput), [bramName])
+    if(packedData['length'] != 2048):
+        print 'Expected 2048 words, got' + str(packedData['length']) + " for antenna(" + str(requiredPol['antenna']) + "), polarisation(" + requiredPol['pol'] + "). Failing...\n"
+        exit_fail()
+    # unpack the data
+    unpackedBytes = struct.unpack('>8192b', packedData[bramName])
+    return unpackedBytes, requiredFpga
+
+# make the log handler
+lh=corr.log_handlers.DebugLogHandler()
+
+# check the specified antennae, if any
+polList = []
+if opts.antAndPol != None:
+    polList = parseAntenna(opts.antAndPol)
+else:
+    print 'No antenna given for which to plot data.'
+    exit_fail()
+
+try:
+    # make the correlator object
+    print 'Connecting to correlator...',
+    c=corr.corr_functions.Correlator(args[0], lh)
+    for s,server in enumerate(c.fsrvs): c.floggers[s].setLevel(10)
+    print 'done.'
+
+    # set up the figure with a subplot for each polarisation to be plotted
+    fig = matplotlib.pyplot.figure()
+    ax = fig.add_subplot(len(polList), 1, 1)
+    maxy = 0
+
+    # callback function to draw the data for all the required polarisations
+    def drawDataCallback(maxy):
+        counter = 1
+        matplotlib.pyplot.clf()
+        for pol in polList:
+            matplotlib.pyplot.subplot(len(polList), 1, counter)
+            unpackedData, ffpga = getUnpackedData(pol)
+            histData = pylab.histogram(unpackedData, range(-128,129))
+            matplotlib.pyplot.bar(range(-128,128), histData[0])
+            matplotlib.pyplot.xlim(-128, 128)
+            matplotlib.pyplot.title('ant(' + str(pol['antenna']) + ') pol(' + pol['pol'] + ') ffpga(' + str(ffpga) + ')')
+            counter = counter + 1
+            maxy = max(maxy, max(histData[0]) + 50)
+        # set the y axis to the same
+        counter = 1
+        for pol in polList:
+            matplotlib.pyplot.subplot(len(polList), 1, counter)
+            matplotlib.pyplot.ylim(0, maxy)
+            counter = counter + 1
+        #fig.canvas.draw()
+        fig.canvas.manager.window.after(100, drawDataCallback, maxy)
+
+    # start the process
+    fig.canvas.manager.window.after(100, drawDataCallback, maxy)
+    matplotlib.pyplot.show()
+    print 'Plot started.'
+
+except KeyboardInterrupt:
+    exit_clean()
+except:
+    exit_fail()
+
+print 'Done with all.'
+exit_clean()
+
+# end
+
