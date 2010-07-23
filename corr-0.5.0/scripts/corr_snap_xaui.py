@@ -144,7 +144,7 @@ if __name__ == '__main__':
     from optparse import OptionParser
 
     p = OptionParser()
-    p.set_usage('snap_xaui.py [options] CONFIG_FILE')
+    p.set_usage('corr_snap_xaui.py [options] CONFIG_FILE')
     p.set_description(__doc__)
     p.add_option('-t', '--man_trigger', dest='man_trigger', action='store_true',
         help='Trigger the snap block manually')   
@@ -250,7 +250,7 @@ try:
                 pkt_len=i-pkt_hdr_idx+1
                 feng_unpkd_pkt=feng_unpack(f,pkt_hdr_idx,pkt_len,skip_indices)
 
-                print '[%s] [Pkt@ %4i Len: %2i]     (MCNT %16u ANT: %1i, Freq: %4i)  RMS: X: %1.2f Y: %1.2f.  {X: %1.2f+%1.2fj (%2.1f & %2.1f bits), Y:%1.2f+%1.2fj (%2.1f & %2.1f bits)} {Pk: X,Y: %1.2f,%1.2f (%2.1f,%2.1f bits)}'%(c.servers[f],\
+                print '[%s] [Pkt@ %4i Len: %2i]     (MCNT %16u ANT: %1i, Freq: %4i)  RMS: X: %1.2f Y: %1.2f.  {X: %1.2f+%1.2fj (%2.1f & %2.1f bits), Y:%1.2f+%1.2fj (%2.1f & %2.1f bits)} {Pk: X,Y: %1.2f,%1.2f (%2.1f,%2.1f bits)}'%(c.xsrvs[f],\
                     pkt_hdr_idx,\
                     pkt_len-len(skip_indices),\
                     feng_unpkd_pkt['pkt_mcnt'],\
