@@ -37,7 +37,8 @@ if __name__ == '__main__':
     p = OptionParser()
     p.set_usage('corr_adc_histogram.py [options] CONFIG FILE')
     p.add_option('-v', '--verbose', dest = 'verbose', action = 'store_true', help = 'Print raw output.')
-    p.add_option('-a', '--antenna', dest = 'antAndPol', action = 'store', help = 'Specify an antenna and pol for which to get ADC histograms. 3x will give pol x for antenna three. 27y will give pol y for antenna 27.')
+    p.add_option('-a', '--antenna', dest = 'antAndPol', action = 'store', help = 'Specify an antenna and pol for which to get ADC histograms. 3x will give pol x for antenna three. 27y will give pol y for antenna 27. 3 on its own will give both \'x\' and \'y\' for antenna three. 3x,27y will do pol \'x\' of antenna 3 and pol \'y\' of antenna 27.')
+    p.add_option('-c', '--compare', dest = 'comparePlots', action = 'store_true', help = 'Compare plots directly using the same y-axis for all plots.')
     p.set_description(__doc__)
     opts, args = p.parse_args(sys.argv[1:])
     if args==[]:
@@ -74,7 +75,7 @@ def getUnpackedData(requiredPol):
     # get the data
     packedData = c.ffpgas[requiredFpga].get_snap(snapName + str(requiredFengInput), [bramName])
     if(packedData['length'] != 2048):
-        print 'Expected 2048 words, got' + str(packedData['length']) + " for antenna(" + str(requiredPol['antenna']) + "), polarisation(" + requiredPol['pol'] + "). Failing...\n"
+        print 'Expected 2048 words, got ' + str(packedData['length']) + " for antenna(" + str(requiredPol['antenna']) + "), polarisation(" + requiredPol['pol'] + "). Failing...\n"
         exit_fail()
     # unpack the data
     unpackedBytes = struct.unpack('>8192b', packedData[bramName])
@@ -101,32 +102,34 @@ try:
     # set up the figure with a subplot for each polarisation to be plotted
     fig = matplotlib.pyplot.figure()
     ax = fig.add_subplot(len(polList), 1, 1)
-    maxy = 0
 
     # callback function to draw the data for all the required polarisations
-    def drawDataCallback(maxy):
+    def drawDataCallback(comparePlots):
         counter = 1
         matplotlib.pyplot.clf()
+        maxY = 0
         for pol in polList:
             matplotlib.pyplot.subplot(len(polList), 1, counter)
             unpackedData, ffpga = getUnpackedData(pol)
-            histData = pylab.histogram(unpackedData, range(-128,129))
-            matplotlib.pyplot.bar(range(-128,128), histData[0])
-            matplotlib.pyplot.xlim(-128, 128)
-            matplotlib.pyplot.title('ant(' + str(pol['antenna']) + ') pol(' + pol['pol'] + ') ffpga(' + str(ffpga) + ')')
+            histData = pylab.histogram(unpackedData, range(-128,129))[0]
+            maxY = max(maxY, max(histData))
+            matplotlib.pyplot.bar(range(-128,128), histData)
+            if not comparePlots:
+                matplotlib.pyplot.ylim(ymax = max(histData))
+            matplotlib.pyplot.xticks(range(-130,131,10))
+            matplotlib.pyplot.title('ant(' + str(pol['antenna']) + ') pol(' + pol['pol'] + ') ffpga(' + str(ffpga) + ') max(' + str(max(histData)) + ')')
             counter = counter + 1
-            maxy = max(maxy, max(histData[0]) + 50)
-        # set the y axis to the same
-        counter = 1
-        for pol in polList:
-            matplotlib.pyplot.subplot(len(polList), 1, counter)
-            matplotlib.pyplot.ylim(0, maxy)
-            counter = counter + 1
+        if comparePlots:
+            counter = 1
+            for pol in polList:
+                matplotlib.pyplot.subplot(len(polList), 1, counter)
+                matplotlib.pyplot.ylim(ymax = maxY)
+                counter = counter + 1
         #fig.canvas.draw()
-        fig.canvas.manager.window.after(100, drawDataCallback, maxy)
+        fig.canvas.manager.window.after(100, drawDataCallback, comparePlots)
 
     # start the process
-    fig.canvas.manager.window.after(100, drawDataCallback, maxy)
+    fig.canvas.manager.window.after(100, drawDataCallback, opts.comparePlots)
     matplotlib.pyplot.show()
     print 'Plot started.'
 
