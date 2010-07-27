@@ -201,6 +201,9 @@ class Correlator:
         self.feng_ctrl_set_all(arm_rst=True)
         self.config.write('correlator','sync_time',trig_time)
         self.feng_ctrl_set_all(arm_rst=False)
+
+        self.spead_resync_notify()
+
         return trig_time
 
     def get_roach_gbe_conf(self,start_addr,fpga,port):
@@ -270,7 +273,7 @@ class Correlator:
                     if verbose: print '\tBad F engine data on %s, XAUI port %i.'%(self.xsrvs[f],x)
                     rv=False
         return rv
-
+    
     def check_10gbe_tx(self,verbose=False):
         """Checks that the 10GbE cores are transmitting data. Outputs boolean good/bad."""
         rv=True
@@ -417,12 +420,10 @@ class Correlator:
         if acc_len<0: acc_len=self.config['acc_len']
         self.xwrite_int_all('acc_len', acc_len)
 
-    def ant_index_set(self):
+    def feng_brd_id_set(self):
         """Sets the F engine boards' antenna indices. (Numbers the base_ant software register.)"""
-        ant = 0
         for f,fpga in enumerate(self.ffpgas):
-            fpga.write_int('ant_base', ant)
-            ant += self.config['f_per_fpga']
+            fpga.write_int('board_id', f)
 
     def get_ant_location(self, ant, pol='x'):
         " Returns the (ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_input) location for a given antenna. Ant is integer, as are all returns."
@@ -438,11 +439,11 @@ class Correlator:
 
     def udp_exchange_port_set(self):
         """Set the UDP TX port for internal correlator data exchange."""
-        self.xwrite_int_all('gbe_port', data_port)
+        self.xwrite_int_all('gbe_port', self.config['10gbe_port'])
 
     def config_roach_10gbe_ports(self):
         """Configures 10GbE ports on roach X engines for correlator data exchange using TGTAP."""
-        for f,fpga in enumerate(self.fpgas):
+        for f,fpga in enumerate(self.xfpgas):
             for x in range(self.config['n_xaui_ports_per_xfpga']):
                 start_addr=self.config['10gbe_ip']
                 start_port=self.config['10gbe_port']
@@ -739,9 +740,9 @@ class Correlator:
 
     def eq_spectrum_set(self,ant,pol,verbose=False,init_coeffs=[]):
         """Set a given antenna and polarisation equaliser to given co-efficients. pol is 'x' or 'y'. ant is integer in range n_ants. Assumes equaliser of 16 bits. init_coeffs is list of length n_chans/decimation_factor."""
+        ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_input = self.get_ant_location(ant,pol)
         fpga=self.ffpgas[ffpga_n]
         pol_n = self.config['pol_map'][pol]
-        ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_input = self.get_ant_location(ant,pol)
         register_name='eq%i'%(2*feng_input)
         n_coeffs = self.config['n_chans']/self.config['eq_decimation']
 
@@ -790,7 +791,7 @@ class Correlator:
                 if rv[(ant,pol)]['bits'] < 0: rv[(ant,pol)]['bits']=0
         return rv
 
-    def issue_spead_metadata(self):
+    def spead_metadata_issue(self):
         """ Issues the SPEAD metadata packets containing the payload and options descriptors and unpack sequences."""
         print "NOT IMPLEMENTED YET"
         import spead
@@ -887,6 +888,11 @@ class Correlator:
             shape=[],fmt=spead.mkfmt(('u',16)),
             init_val=self.config['rx_udp_port'])
 
+        ig.add_item(name="feng_udp_port",id=0x1023,
+            description="Destination UDP port for F engine data exchange.",
+            shape=[],fmt=spead.mkfmt(('u',32)),
+            init_val=self.config['10gbe_port'])
+
         ig.add_item(name="rx_udp_ip_str",id=0x1024,
             description="Destination IP address for X engine output UDP packets.",
             shape=[-1],fmt=spead.STR_FMT,
@@ -896,11 +902,6 @@ class Correlator:
             description="F engine starting IP address.",
             shape=[],fmt=spead.mkfmt(('u',32)),
             init_val=self.config['10gbe_ip'])
-
-        ig.add_item(name="feng_udp_port",id=0x1023,
-            description="Destination UDP port for F engine data exchange.",
-            shape=[],fmt=spead.mkfmt(('u',32)),
-            init_val=self.config['10gbe_port'])
 
         ig.add_item(name="eng_rate",id=0x1026,
             description="Target clock rate of processing engines (xeng).",
@@ -914,29 +915,31 @@ class Correlator:
 
         tx.send_heap(ig.get_heap())
 
+        self.spead_resync_notify()
 
-    def issue_spead_data_descriptor(self):
+    def spead_resync_notify(self):
+        """Issues a SPEAD packet to notify the receiver that we've resync'd the system."""
+        import spead
+        tx=spead.Transmitter(spead.TransportUDPtx(self.config['rx_udp_ip_str'],self.config['rx_udp_port']))
+        ig=spead.ItemGroup()
+        ig.add_item(name='sync_time',id=0x1027,
+            description="Time at which the system was last synchronised (armed and triggered by a 1PPS) in seconds since the Unix Epoch.",
+            shape=[],fmt=spead.mkfmt(('u',32)),
+            init_val=self.config['sync_time'])
+
+        tx.send_heap(ig.get_heap())
+
+
+    def spead_data_descriptor_issue(self):
         """ Issues the SPEAD data descriptors for the HW 10GbE output, to enable receivers to decode the data."""
         import spead
         tx=spead.Transmitter(spead.TransportUDPtx(self.config['rx_udp_ip_str'],self.config['rx_udp_port']))
         ig=spead.ItemGroup()
 
-        ig.add_item(name='complex',id=0x2040,
-            description="A complex number consisting of two unsigned integers. (Real,Imag)",
-            shape=[],fmt=spead.mkfmt(('u',32),('u',32)))
-
-        ig.add_item(name="baseline",id=0x2041,
-            description="An array of all the baselines for a single frequency channel.",
-            shape=[self.config['n_bls']],fmt=spead.mkfmt(('0',0x2040)))
-
-        ig.add_item(name="spectrum",id=0x2042,
-            description="An array of all the frequency channels in the system (each one consisting of all baselines for a given channel).",
-            shape=[self.config['n_chans']],fmt=spead.mkfmt(('0',0x2041)))
-
-        for x in range(self.n_xengs):
+        for x in range(self.config['n_xeng']):
             ig.add_item(name=("xeng_raw%i"%x),id=(0x2048+x),
-                description="Raw data for xengine %i out of %i. Frequency channels are split amonst xengines. Frequencies are distributed to xengines in a round-robin fashion, starting with engine 0. Data from all X engines must thus be combed or interleaved together to get continuous frequencies. Each xengine calculates all baselines (n_bls given by SPEAD ID 0x100B) for a given frequency channel. For a given baseline, -SPEAD ID 0x1040- stokes parameters are calculated (nominally 4 since xengines are natively dual-polarisation; software remapping is required for single-baseline designs). Each stokes parameter consists of two numbers, real and imaginary, each component of which is given by SPEAD ID     0x1048."%(x,self.config['n_xengs']),
-                shape=[self.config['n_xengs']],fmt=spead.mkfmt(('0',0x2040)))
+                description="Raw data for xengine %i out of %i. Frequency channels are split amonst xengines. Frequencies are distributed to xengines in a round-robin fashion, starting with engine 0. Data from all X engines must thus be combed or interleaved together to get continuous frequencies. Each xengine calculates all baselines (n_bls given by SPEAD ID 0x100B) for a given frequency channel. For a given baseline, -SPEAD ID 0x1040- stokes parameters are calculated (nominally 4 since xengines are natively dual-polarisation; software remapping is required for single-baseline designs). Each stokes parameter consists of a complex number (two real and imaginary unsigned integers)."%(x,self.config['n_xeng']),
+                ndarray=(np.dtype(np.uint32),(self.config['n_chans']/self.config['n_xeng'],self.config['n_bls'],self.config['n_stokes'],2)))
 
         tx.send_heap(ig.get_heap())
 

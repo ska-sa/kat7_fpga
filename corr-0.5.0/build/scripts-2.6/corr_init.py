@@ -120,15 +120,16 @@ try:
     #time_skt.sendto(pkt_str,(c.config['rx_udp_ip_str'],c.config['rx_udp_port']))
     #time_skt.close()
     #print 'Pkt sent.'
+    print 'done'
 
     print (''' Setting the accumulation length to %i (%2.2f seconds)...'''%(c.config['acc_len'],c.config['int_time'])),
     sys.stdout.flush()
     c.acc_len_set()
     print 'done'
 
-    print(''' Setting the antenna indices...'''),
+    print(''' Setting the board indices...'''),
     sys.stdout.flush()
-    c.ant_index_set()
+    #c.brd_id_set()
     print ('''done''')
 
     # Set UDP TX data port
@@ -158,7 +159,7 @@ try:
         """Even if we aren't configuring the 10GbE cores, we still need to setup these registers, because they're interrogated by cn_tx.py"""
         for x in range(c.config['x_per_fpga']):
             for f,fpga in enumerate(c.xfpgas):
-                fpga.write_int('inst_xeng_id%i'%x,x*len(c.fpgas)+f)
+                fpga.write_int('inst_xeng_id%i'%x,x*len(c.xfpgas)+f)
 
     #print('Resetting 10GbE cores...'),
     #sys.stdout.flush()
@@ -190,7 +191,7 @@ try:
     print 'Verifying correct operation...'
     print '================================'
 
-    wait_time=len(c.fpgas)/2
+    wait_time=len(c.xfpgas)/2
     print(''' Wait %i seconds for system to stabalise...'''%wait_time),
     sys.stdout.flush()
     time.sleep(wait_time)

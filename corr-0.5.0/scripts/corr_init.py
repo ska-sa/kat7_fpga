@@ -89,7 +89,7 @@ try:
         print 'done.'
 
         # PROGRAM THE DEVICES
-        print ''' Programming the Fengines with %s and the Xengines with %s...'''%(c.config['fbitstream'],c.config['xbitstream']),
+        print ''' Programming the Fengines with %s and the Xengines with %s...'''%(c.config['bitstream_f'],c.config['bitstream_x']),
         sys.stdout.flush()
         c.prog_all()
         print 'done.'
@@ -110,25 +110,26 @@ try:
         #lh.printMessages()
         print 'done'
 
-    print ''' Syncing the F engines...'''
+    print ''' Syncing the F engines...''',
     sys.stdout.flush()
     trig_time=c.arm()
-    print 'Armed. Expect trigg at %s local (%s UTC).'%(time.strftime('%H:%M:%S',time.localtime(trig_time)),time.strftime('%H:%M:%S',time.gmtime(trig_time)))
+    print 'Armed. Expect trigg at %s local (%s UTC).'%(time.strftime('%H:%M:%S',time.localtime(trig_time)),time.strftime('%H:%M:%S',time.gmtime(trig_time))),
     #send a SPEAD resync packet:
     #time_skt=socket.socket(type=socket.SOCK_DGRAM)
     #pkt_str=struct.pack('>HHHHQ',0x5453,3,0,1,trig_time)
     #time_skt.sendto(pkt_str,(c.config['rx_udp_ip_str'],c.config['rx_udp_port']))
     #time_skt.close()
     #print 'Pkt sent.'
+    print 'done'
 
     print (''' Setting the accumulation length to %i (%2.2f seconds)...'''%(c.config['acc_len'],c.config['int_time'])),
     sys.stdout.flush()
     c.acc_len_set()
     print 'done'
 
-    print(''' Setting the antenna indices...'''),
+    print(''' Setting the board indices...'''),
     sys.stdout.flush()
-    c.ant_index_set()
+    #c.brd_id_set()
     print ('''done''')
 
     # Set UDP TX data port
@@ -158,7 +159,7 @@ try:
         """Even if we aren't configuring the 10GbE cores, we still need to setup these registers, because they're interrogated by cn_tx.py"""
         for x in range(c.config['x_per_fpga']):
             for f,fpga in enumerate(c.xfpgas):
-                fpga.write_int('inst_xeng_id%i'%x,x*len(c.fpgas)+f)
+                fpga.write_int('inst_xeng_id%i'%x,x*len(c.xfpgas)+f)
 
     #print('Resetting 10GbE cores...'),
     #sys.stdout.flush()
@@ -190,7 +191,7 @@ try:
     print 'Verifying correct operation...'
     print '================================'
 
-    wait_time=len(c.fpgas)/2
+    wait_time=len(c.xfpgas)/2
     print(''' Wait %i seconds for system to stabalise...'''%wait_time),
     sys.stdout.flush()
     time.sleep(wait_time)
