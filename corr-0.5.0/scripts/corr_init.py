@@ -46,8 +46,6 @@ if __name__ == '__main__':
     p = OptionParser()
     p.set_usage('init_corr.py [options] CONFIG_FILE')
     p.set_description(__doc__)
-    p.add_option('-m', '--monitor_only', dest='monitor_only', action='store_true', default=False, 
-        help='Skip the initialision. ie Only monitor.')
     p.add_option('-r', '--n_retries', dest='n_retries', type='int', default=40, 
         help='Number of times to try after an error before giving up. Default: 40')
     p.add_option('-p', '--skip_prog', dest='prog_fpga',action='store_false', default=True, 
@@ -95,10 +93,12 @@ try:
         print 'done.'
     else: print ' Skipped programming FPGAs.'
 
-    # Disable 10GbE cores until the network's been setup and ARP tables have settled. Need to do a reset here too to flush buffers in the core.
+    # Disable 10GbE cores until the network's been setup and ARP tables have settled. 
+    # Need to do a reset here too to flush buffers in the core. But must be careful; resets are asynchronous and there must be no activity on the core (fifos) when they are reset.
     print('\n Pausing 10GbE data exchange, resetting the 10GbE cores and clearing X engine TVGs...'),
     sys.stdout.flush()
-    c.xeng_ctrl_set_all(gbe_disable=True, gbe_rst=True)
+    c.xeng_ctrl_set_all(gbe_disable=True) #DO NOT RESET THE 10GBE CORES SYNCHRONOUSLY... Packets will be routed strangely!
+    c.xeng_ctrl_set_all(gbe_disable=True, gbe_rst=True) 
     print 'done.'
 
     if opts.prog_10gbe_cores:
@@ -114,13 +114,7 @@ try:
     sys.stdout.flush()
     trig_time=c.arm()
     print 'Armed. Expect trigg at %s local (%s UTC).'%(time.strftime('%H:%M:%S',time.localtime(trig_time)),time.strftime('%H:%M:%S',time.gmtime(trig_time))),
-    #send a SPEAD resync packet:
-    #time_skt=socket.socket(type=socket.SOCK_DGRAM)
-    #pkt_str=struct.pack('>HHHHQ',0x5453,3,0,1,trig_time)
-    #time_skt.sendto(pkt_str,(c.config['rx_udp_ip_str'],c.config['rx_udp_port']))
-    #time_skt.close()
-    #print 'Pkt sent.'
-    print 'done'
+    print 'SPEAD packet sent.'
 
     print (''' Setting the accumulation length to %i (%2.2f seconds)...'''%(c.config['acc_len'],c.config['int_time'])),
     sys.stdout.flush()
@@ -129,7 +123,18 @@ try:
 
     print(''' Setting the board indices...'''),
     sys.stdout.flush()
-    #c.brd_id_set()
+    c.feng_brd_id_set()
+    print ('''done''')
+
+    if c.config['adc_type'] == 'katadc':
+        print(''' Setting the RF gain stages on the KATADC...'''),
+        sys.stdout.flush()
+        c.rf_gain_set_all()
+        print ('''done''')
+
+    print(''' Setting the FFT shift schedule to 0x%X...'''%c.config['fft_shift']),
+    sys.stdout.flush()
+    c.fft_shift_set_all()
     print ('''done''')
 
     # Set UDP TX data port
@@ -137,6 +142,13 @@ try:
     sys.stdout.flush()
     c.udp_exchange_port_set()
     print 'done'
+
+    print ' Configuring EQ...',
+    sys.stdout.flush()
+    if opts.prog_eq:
+        c.eq_set_all()
+        print 'done'
+    else: print 'skipped.'
 
     if opts.prog_10gbe_cores:
         print('''\nWaiting for ARP to complete...'''),
@@ -150,36 +162,20 @@ try:
         c.config_udp_output()
         print 'done'
 
-        #print ' Enabling UDP output...',
-        #sys.stdout.flush()
-        #c.write_all_xeng_ctrl(gbe_out_enable=True)
-        #print  'done'
-    
     else:
-        """Even if we aren't configuring the 10GbE cores, we still need to setup these registers, because they're interrogated by cn_tx.py"""
+        """Even if we aren't configuring the 10GbE cores, we still need to setup these registers, because they're interrogated by corr_tx.py"""
         for x in range(c.config['x_per_fpga']):
             for f,fpga in enumerate(c.xfpgas):
                 fpga.write_int('inst_xeng_id%i'%x,x*len(c.xfpgas)+f)
 
-    #print('Resetting 10GbE cores...'),
-    #sys.stdout.flush()
-    #c.write_all_xeng_ctrl(gbe_rst=True)
-    #c.write_all_xeng_ctrl(gbe_rst=False)
-    #print 'done.'
-
     # Restart 10GbE data exchange (had to wait until the network's been setup and ARP tables have settled).
+    # need to be careful about resets. these are asynchronous.
     print(' Starting 10GbE data exchange...'),
     sys.stdout.flush()
-    c.xeng_ctrl_set_all(gbe_disable=False)
+    c.xeng_ctrl_set_all(gbe_disable=True,gbe_rst=False)
+    c.xeng_ctrl_set_all(gbe_disable=False,gbe_rst=False)
     print 'done.'
     
-    print ' Configuring EQ...',
-    sys.stdout.flush()
-    if opts.prog_eq:
-        c.eq_set_all()
-        print 'done'
-    else: print 'skipped.'
-
     print(' Flushing loopback muxs...'),
     sys.stdout.flush()
     c.xeng_ctrl_set_all(loopback_mux_rst=True,gbe_disable=True)
@@ -262,7 +258,13 @@ try:
         c.check_x_miss(verbose=True)
         exit_clean()
 
-#    monitor()
+    if opts.config_output: 
+        print ' Enabling UDP output...',
+        sys.stdout.flush()
+        c.write_all_xeng_ctrl(gbe_out_enable=True)
+        print  'done'
+    
+
 except KeyboardInterrupt:
     exit_clean()
 except:

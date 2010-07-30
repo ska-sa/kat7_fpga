@@ -32,12 +32,13 @@ class Correlator:
         self.config = corr.cn_conf.CorrConf(config_file)
         self.xsrvs = self.config['servers_x']
         self.fsrvs = self.config['servers_f']
-        self.allsrvs = self.fsrvs+self.xsrvs
+        self.allsrvs = self.fsrvs + self.xsrvs
 
         if log_handler == '': log_handler=corr.log_handlers.DebugLogHandler()
         self.log_handler = log_handler
         self.floggers=[logging.getLogger(s) for s in self.fsrvs]
         self.xloggers=[logging.getLogger(s) for s in self.xsrvs]
+        self.loggers=self.floggers + self.xloggers
         for logger in (self.floggers+self.xloggers): logger.addHandler(log_handler)
 
         self.xfpgas=[corr.katcp_wrapper.FpgaClient(server,self.config['katcp_port'],
@@ -46,7 +47,7 @@ class Correlator:
                        timeout=10,logger=self.floggers[s]) for s,server in enumerate(self.fsrvs)]
         self.allfpgas = self.ffpgas + self.xfpgas
 
-        time.sleep(1)
+        time.sleep(2)
         if not self.check_katcp_connections():
             self.check_katcp_connections(verbose=True)
             raise RuntimeError("Connection to FPGA boards failed.")
@@ -80,34 +81,34 @@ class Correlator:
             fpga.progdev('')
 
     def xread_all(self,register,bram_size,offset=0):
-        """Reads a register of specified size from all X engines. Returns a list."""
+        """Reads a register of specified size from all X-engines. Returns a list."""
         rv = [fpga.read(register,bram_size,offset) for fpga in self.xfpgas]
         return rv
 
     def fread_all(self,register,bram_size,offset=0):
-        """Reads a register of specified size from all F engines. Returns a list."""
+        """Reads a register of specified size from all F-engines. Returns a list."""
         rv = [fpga.read(register,bram_size,offset) for fpga in self.ffpgas]
         return rv
 
     def xread_uint_all(self, register):
-        """Reads a value from register 'register' for all Xeng FPGAs."""
+        """Reads a value from register 'register' for all X-engine FPGAs."""
         return [fpga.read_uint(register) for fpga in self.xfpgas]
 
     def fread_uint_all(self, register):
-        """Reads a value from register 'register' for all Feng FPGAs."""
+        """Reads a value from register 'register' for all F-engine FPGAs."""
         return [fpga.read_uint(register) for fpga in self.ffpgas]
 
     def xwrite_int_all(self,register,value):
-        """Writes to a 32-bit software register on all Xengines."""
+        """Writes to a 32-bit software register on all X-engines."""
         [fpga.write_int(register,value) for fpga in self.xfpgas]
 
     def fwrite_int_all(self,register,value):
-        """Writes to a 32-bit software register on all Fengines."""
+        """Writes to a 32-bit software register on all F-engines."""
         [fpga.write_int(register,value) for fpga in self.ffpgas]
 
-    def feng_ctrl_set_all(self, use_sram_tvg=False, use_fft_tvg1=False, use_fft_tvg2=False, arm_rst=False, mrst=False, clr_status=False, soft_sync=False):
+    def feng_ctrl_set_all(self, tvg_ct_sel=False, tvg_pkt_sel=False, tvg_ffdel_sel=False, tvg_en=False, arm_rst=False, mrst=False, clr_status=False, soft_sync=False):
         """Writes a value to all the Fengine control registers."""
-        value = use_sram_tvg<<6 | use_fft_tvg2<<5 | use_fft_tvg1<<4 | clr_status<<3 | arm_rst<<2 | soft_sync<<1 | mrst<<0
+        value = tvg_ffdel_sel<<19 | tvg_pkt_sel<<18 | tvg_ct_sel<<17 | tvg_en<<16 | clr_status<<3 | arm_rst<<2 | soft_sync<<1 | mrst<<0
         self.fwrite_int_all('control',value)
 
     def feng_ctrl_get_all(self):
@@ -116,20 +117,59 @@ class Correlator:
         return [{'mrst':bool(value&(1<<0)),
                 'soft_sync':bool(value&(1<<1)),
                 'arm':bool(value&(1<<2)),
+                'tvg_enable':bool(value&(1<<16)),
+                'tvg_ct_sel':bool(value&(1<<17)),
+                'tvg_pkt_sel':bool(value&(1<<18)),
+                'tvg_ffdel_sel':bool(value&(1<<19)),
                 'clr_status':bool(value&(1<<3))} for value in all_values]
+
+    def feng_tvg_sel(self,ct=False,pkt=False,ffdel=False):
+        """Turns TVGs on/off on the F engines. Will not disturb other control register settings."""
+        #stat=self.feng_ctrl_get_all()
+        #self.feng_ctrl_set_all(tvg_en=True,  tvg_ct_sel=ct, tvg_pkt_sel=pkt, tvg_ffdel_sel=ffdel, arm_rst=stat['arm_rst'], mrst=stat['mrst'], clr_status=stat['clr_status'], soft_sync=stat['soft_sync'])
+        #self.feng_ctrl_set_all(tvg_en=False, tvg_ct_sel=ct, tvg_pkt_sel=pkt, tvg_ffdel_sel=ffdel, arm_rst=stat['arm_rst'], mrst=stat['mrst'], clr_status=stat['clr_status'], soft_sync=stat['soft_sync'])
+        self.feng_ctrl_set_all(tvg_en=True,  tvg_ct_sel=ct, tvg_pkt_sel=pkt, tvg_ffdel_sel=ffdel)
+        self.feng_ctrl_set_all(tvg_en=False, tvg_ct_sel=ct, tvg_pkt_sel=pkt, tvg_ffdel_sel=ffdel)
 
     def xeng_ctrl_set_all(self,loopback_mux_rst=False, gbe_out_enable=False, gbe_disable=False, cnt_rst=False, gbe_rst=False, vacc_rst=False):
         """Writes a value to all the Xengine control registers."""
         value = gbe_out_enable<<16 | loopback_mux_rst<<10 | gbe_disable<<9 | cnt_rst<<8 | gbe_rst<<15 | vacc_rst<<0
-        self.xwrite_int_all('ctrl',value)
+        self.xwrite_int_all('ctrl', value)
 
-    def fft_shift_set(self,fft_shift=-1):
+    def xeng_ctrl_get_all(self, translate = True):
+        """
+        Reads and decodes the values from all the X-engine control registers.
+        @param translate: boolean, if True will decode the control registers.
+        @return a list by X-engine fpga hostname
+        """
+        values = self.xread_uint_all('ctrl')
+        valuesByFpgaHost = [{'fpgaHost':fpga.host, 'ctrlRegister':values[ctr]} for ctr,fpga in enumerate(self.xfpgas)]
+        if not translate: return valuesByFpgaHost
+        return [{'fpgaHost':value['fpgaHost'],
+                 'ctrlRegister':value['ctrlRegister'],
+                'gbe_out_enable':bool(value['ctrlRegister']&(1<<16)),
+                'gbe_rst':bool(value['ctrlRegister']&(1<<15)),
+                'gbe_out_rst':bool(value['ctrlRegister']&(1<<11)),
+                'loopback_mux_rst':bool(value['ctrlRegister']&(1<<10)),
+                'gbe_disable':bool(value['ctrlRegister']&(1<<9)),
+                'cnt_rst':bool(value['ctrlRegister']&(1<<8)),
+                'vacc_rst':bool(value['ctrlRegister']&(1<<0))} for value in valuesByFpgaHost]
+
+    def fft_shift_set_all(self,fft_shift=-1):
         """Configure the FFT on all F engines to the specified schedule. If not specified, default to schedule listed in config file."""
         #tested ok corr-0.5.0 2010-07-20
         if fft_shift <0:
             fft_shift = self.config['fft_shift']
         for ant in range(self.config['f_per_fpga']*self.config['n_pols']):
             self.fwrite_int_all("fft_shift%i"%ant,fft_shift)
+
+    def fft_shift_get_all(self):
+        rv={}
+        for ant in range(self.config['n_ants']):
+            for pol in self.config['pols']:
+                ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_input = self.get_ant_location(ant,pol)
+                rv[(ant,pol)]=self.ffpgas[ffpga_n].read_uint('fft_shift%i'%feng_input)
+        return rv
 
     def feng_status_get_all(self):
         """Reads and decodes the status register from all the Fengines."""
@@ -141,24 +181,14 @@ class Correlator:
                 #for xaui_n in range(self.config['n_xaui_per_ffpga
                 rv[(ant,pol)]={'xaui_lnkdn':bool(value&(1<<17)),
                                 'xaui_over':bool(value&(1<<16)),
+                                'ct_error':bool(value&(1<<3)),
                                 'adc_overrange':bool(value&(1<<2)),
                                 'fft_overrange':bool(value&(1<<1)),
                                 'quant_overrange':bool(value&(1<<0))}
         return rv
 
-    def xeng_ctrl_get_all(self):
-        """Reads and decodes the values from all the Xengine control registers."""
-        all_values = self.xread_uint_all('ctrl')
-        return [{'gbe_out_enable':bool(value&(1<<16)),
-                'gbe_rst':bool(value&(1<<15)),
-                'gbe_out_rst':bool(value&(1<<11)),
-                'loopback_mux_rst':bool(value&(1<<10)),
-                'gbe_disable':bool(value&(1<<9)),
-                'cnt_rst':bool(value&(1<<8)),
-                'vacc_rst':bool(value&(1<<0))} for value in all_values]
-
     def check_feng_clk_freq(self,verbose=False):
-        """ Checks all Fengine FPGAs' clk_frequency registers to confirm correct PPS operation."""
+        """ Checks all Fengine FPGAs' clk_frequency registers to confirm correct PPS operation. Requires that the system be sync'd."""
         #tested ok corr-0.5.0 2010-07-19
         import stats
         all_values = self.fread_uint_all('clk_frequency')
@@ -170,6 +200,16 @@ class Correlator:
                 if all_values[fbrd] == 0: print '\tNo PPS detected on %s.'%fsrv
                 else:   print "\tClocks between PPS pulses on %s is %i, where modal mean is %i."%(fsrv,all_values[fbrd], modalmean)
             if (all_values[fbrd] > (modalmean+2)) or (all_values[fbrd] < (modalmean -2)) or (all_values[fbrd]==0):
+                rv=False
+
+        uptime=[ut[1] for ut in self.feng_uptime()]
+        mode = stats.mode(uptime)
+        modalmean=stats.mean(mode[1])
+        for fbrd,fsrv in enumerate(self.fsrvs):
+            if verbose: 
+                if uptime[fbrd] == 0: print '\tNo PPS detected on %s.'%fsrv
+                else:   print "\tUptime of %s is %i PPS pulses, where modal mean is %i pulses."%(fsrv,uptime[fbrd], modalmean)
+            if (uptime[fbrd] > (modalmean+1)) or (uptime[fbrd] < (modalmean -1)) or (uptime[fbrd]==0):
                 rv=False
         return rv
 
@@ -190,7 +230,7 @@ class Correlator:
         return mcnt
     
     def arm(self):
-        """Arms all F engines. Returns the UTC time at which the system was sync'd in seconds since the Unix epoch (MCNT=0)"""
+        """Arms all F engines, records arm time in config file and issues SPEAD update. Returns the UTC time at which the system was sync'd in seconds since the Unix epoch (MCNT=0)"""
         #tested ok corr-0.5.0 2010-07-19
         #wait for within 100ms of a half-second, then send out the arm signal.
         ready=(int(time.time()*10)%5)==0
@@ -201,7 +241,6 @@ class Correlator:
         self.feng_ctrl_set_all(arm_rst=True)
         self.config.write('correlator','sync_time',trig_time)
         self.feng_ctrl_set_all(arm_rst=False)
-
         self.spead_resync_notify()
 
         return trig_time
@@ -486,10 +525,10 @@ class Correlator:
                 fpga.tap_start('gbe_out%i'%x,mac,ip,port)
 
     def enable_udp_output(self):
-        self.xxeng_ctrl_set_all(gbe_out_enable=True)
+        self.xeng_ctrl_set_all(gbe_out_enable=True)
 
     def disable_udp_output(self):
-        self.xxeng_ctrl_set_all(gbe_out_enable=False)
+        self.xeng_ctrl_set_all(gbe_out_enable=False)
 
     def deconfig_roach_10gbe_ports(self):
         """Stops tgtap drivers for the X engines."""
@@ -715,54 +754,79 @@ class Correlator:
         ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_input = self.get_ant_location(ant,pol)
         self.ffpgas[ffpga_n].write_int('adc_ctrl%i'%feng_input,self.ffpgas[ffpga_n].read_uint('adc_ctrl%i'%feng_input)|0x80000000)
 
-    def eq_set_all(self,verbose=False,init_poly=[]):
-        """Initialise all connected Fengines' EQs to given polynomial. If no polynomial is given, use defaults from config file."""
+    def eq_set_all(self,verbose=False,init_poly=[],init_coeffs=[]):
+        """Initialise all connected Fengines' EQs to given polynomial. If no polynomial or coefficients are given, use defaults from config file."""
         for ant in range(self.config['n_ants']):
             for pol in self.config['pols']:
-                eq_coeffs = numpy.polyval(init_poly, range(self.config['n_chans']))[self.config['eq_decimation']/2::self.config['eq_decimation']]
-                eq_coeffs = [int(coeff) for coeff in eq_coeffs]
-                self.eq_spectrum_set(ant=ant,pol=pol,verbose=verbose,init_coeffs=eq_coeffs)
+                self.eq_spectrum_set(ant=ant,pol=pol,verbose=verbose,init_coeffs=init_coeffs,init_poly=init_poly)
 
-    def get_default_eq(self,ant,pol):
+    def eq_default_get(self,ant,pol,verbose=False):
         "Fetches the default equalisation configuration from the config file and returns a list of the coefficients for a given input. pol is ['x'|'y']" 
         n_coeffs = self.config['n_chans']/self.config['eq_decimation']
         if self.config['eq_default'] == 'poly':
             poly = self.config['eq_poly_%i%c'%(ant,pol)]
             equalisation = numpy.polyval(poly, range(self.config['n_chans']))[self.config['eq_decimation']/2::self.config['eq_decimation']]
             if self.config['eq_type']=='complex':
-                equalisation = [eq+eq*1j for eq in equalisation]
-                
-        elif self.config['eq_default'] == 'coef':
-            equalisation = self.config['eq_coeffs_%i%c'%(ant,pol)]
+                equalisation = [eq+0*1j for eq in equalisation]
+            if verbose:
+                for term,coeff in enumerate(equalisation):
+                    print '''Retrieved default EQ for antenna %i%c: '''%(ant,pol),
+                    if term==(len(coeffs)-1): print '%i...'%(coeff),
+                    else: print '%ix^%i +'%(coeff,len(coeffs)-term-1),
+                    sys.stdout.flush()
+                print ''
+                    
+            elif self.config['eq_default'] == 'coef':
+                equalisation = self.config['eq_coeffs_%i%c'%(ant,pol)]
 
         if len(equalisation) != n_coeffs: raise RuntimeError("Something's wrong. I have %i eq coefficients when I should have %i."%(len(equalisation),n_coeffs))
         return equalisation
 
-    def eq_spectrum_set(self,ant,pol,verbose=False,init_coeffs=[]):
+    def eq_spectrum_get(self,ant,pol):
+        """Retrieves the current equaliser settings for the given antenna,polarisation. Assumes equaliser of 16 bits. Returns an array of length n_chans."""
+        
+        ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_input = self.get_ant_location(ant,pol)
+        register_name='eq%i'%(feng_input)
+        n_coeffs = self.config['n_chans']/self.config['eq_decimation']
+
+        if self.config['eq_type'] == 'scalar':
+            bd=self.ffpgas[ffpga_n].read(register_name,n_coeffs*2)
+            coeffs=numpy.array(struct.unpack('>%ih'%n_coeffs,bd))
+            nacexp=(numpy.reshape(coeffs,(n_coeffs,1))*numpy.ones((1,self.config['eq_decimation']))).reshape(self.config['n_chans'])
+            return nacexp
+            
+        elif self.config['eq_type'] == 'complex':
+            bd=self.ffpgas[ffpga_n].read(register_name,n_coeffs*4)
+            coeffs=struct.unpack('>%ih'%(n_coeffs*2),bd)
+            na=numpy.array(coeffs,dtype=numpy.float64)
+            nac=na.view(dtype=numpy.complex128)
+            nacexp=(numpy.reshape(nac,(n_coeffs,1))*numpy.ones((1,self.config['eq_decimation']))).reshape(self.config['n_chans'])
+            return nacexp
+            
+        else: raise RuntimeError("Unable to interpret eq_type. Expecting scalar or complex")
+
+    def eq_spectrum_set(self,ant,pol,verbose=False,init_coeffs=[],init_poly=[]):
         """Set a given antenna and polarisation equaliser to given co-efficients. pol is 'x' or 'y'. ant is integer in range n_ants. Assumes equaliser of 16 bits. init_coeffs is list of length n_chans/decimation_factor."""
         ffpga_n,xfpga_n,fxaui_n,xxaui_n,feng_input = self.get_ant_location(ant,pol)
         fpga=self.ffpgas[ffpga_n]
         pol_n = self.config['pol_map'][pol]
-        register_name='eq%i'%(2*feng_input)
+        register_name='eq%i'%(feng_input)
         n_coeffs = self.config['n_chans']/self.config['eq_decimation']
 
-        if init_coeffs == []: 
-            coeffs = self.get_default_eq(ant,pol)
+        if init_coeffs == [] and init_poly == []: 
+            coeffs = self.eq_default_get(ant,pol)
         elif len(init_coeffs) == n_coeffs:
             coeffs = init_coeffs
-        else: raise RuntimeError ('You specified %i coefficients, but there are %i EQ coefficients in this design.'%(len(init_coeffs),n_coeffs))
+        elif len(init_coeffs)>0: 
+            raise RuntimeError ('You specified %i coefficients, but there are %i EQ coefficients in this design.'%(len(init_coeffs),n_coeffs))
+        else:
+            coeffs = numpy.polyval(init_poly, range(self.config['n_chans']))[self.config['eq_decimation']/2::self.config['eq_decimation']]
 
         if verbose:
             print 'Writing new coefficient values to config file...'
+            #print coeffs
         self.config.write('equalisation','eq_coeff_%i%c'%(ant,pol),coeffs)
 
-        if verbose:
-            for term,coeff in enumerate(coeffs):
-                print '''Initialising EQ for antenna %i%c, input %i on %s (register %s)'s index %i to'''%(ant,pol,feng_input,self.fsrvs[ffpga_n],register_name,term),
-                if term==(len(coeffs)-1): print '%i...'%(coeff),
-                else: print '%ix^%i +'%(coeff,len(coeffs)-term-1),
-                sys.stdout.flush()
-            print ''
 
         if self.config['eq_type'] == 'scalar':
             coeffs    = numpy.real(coeffs) 
@@ -770,7 +834,11 @@ class Correlator:
 
         elif self.config['eq_type'] == 'complex':
             coeffs    = numpy.array(coeffs,dtype=numpy.complex128)
-            coeff_str = struct.pack('>%iH'%(2*n_coeffs),coeffs.view(dtype=numpy.float64))
+            coeff_str = struct.pack('>%ih'%(2*n_coeffs),*coeffs.view(dtype=numpy.float64))
+
+        if verbose:
+            for term,coeff in enumerate(coeffs):
+                print '''Initialising EQ for antenna %i%c, input %i on %s (register %s)'s index %i to '''%(ant,pol,feng_input,self.fsrvs[ffpga_n],register_name,term),coeff
 
         fpga.write(register_name,coeff_str)
 
@@ -793,7 +861,6 @@ class Correlator:
 
     def spead_metadata_issue(self):
         """ Issues the SPEAD metadata packets containing the payload and options descriptors and unpack sequences."""
-        print "NOT IMPLEMENTED YET"
         import spead
         tx=spead.Transmitter(spead.TransportUDPtx(self.config['rx_udp_ip_str'],self.config['rx_udp_port']))
         ig=spead.ItemGroup()
@@ -814,7 +881,7 @@ class Correlator:
 
         ig.add_item(name="n_stokes",id=0x1040,
             description="Number of Stokes parameters in output.",
-            shape=[],fmt=spead.mkfmt(('u',8)),
+            shape=[],fmt=spead.mkfmt(('u',spead.ADDRSIZE)),
             init_val=self.config['n_stokes'])
 
         ig.add_item(name="n_ants",id=0x100A,
@@ -822,41 +889,77 @@ class Correlator:
             shape=[],fmt=spead.mkfmt(('u',spead.ADDRSIZE)),
             init_val=self.config['n_ants'])
 
-        ig.add_item(name="xeng_out_bits_per_sample",id=0x1048,
-            description="The number of bits per value of the xeng accumulator output. Note this is for a single value, not the combined complex size.",
-            shape=[],fmt=spead.mkfmt(('u',spead.ADDRSIZE)),
-            init_val=self.config['xeng_sample_bits'])
-
-        ig.additem(name="center_freq",id=0x1011,
+        ig.add_item(name="center_freq",id=0x1011,
             description="The center frequency of the DBE in Hz, 64-bit IEEE floating-point number.",
             shape=[],fmt=spead.mkfmt(('f',64)),
-            init_value=self.config['center_freq'])
+            init_val=self.config['center_freq'])
 
-        ig.additem(name="bandwidth",id=0x1013,
+        ig.add_item(name="bandwidth",id=0x1013,
             description="The analogue bandwidth of the digitally processed signal in Hz.",
             shape=[],fmt=spead.mkfmt(('f',64)),
-            init_value=self.config['bandwidth'])
+            init_val=self.config['bandwidth'])
 
-        ig.additem(name="n_accs",id=0x1015,
+        ig.add_item(name="n_accs",id=0x1015,
             description="The number of spectra that are accumulated per integration.",
             shape=[],fmt=spead.mkfmt(('u',spead.ADDRSIZE)),
-            init_value=self.config['acc_len']*self.config['xeng_acc_len'])
+            init_val=self.config['acc_len']*self.config['xeng_acc_len'])
 
         #how to do quantisation scalars?  recommend 1D array of complex numbers
 
-        ig.additem(name="fft_shift",id=0x101E,
+        ig.add_item(name="fft_shift",id=0x101E,
             description="The FFT bitshift pattern. F-engine correlator internals.",
             shape=[],fmt=spead.mkfmt(('u',spead.ADDRSIZE)),
-            init_value=self.config['fft_shift'])
+            init_val=self.config['fft_shift'])
+
+        ig.add_item(name="n_ants_per_xaui",id=0x1042,
+            description="Number of antennas' data per XAUI link.",
+            shape=[],fmt=spead.mkfmt(('u',spead.ADDRSIZE)),
+            init_val=self.config['n_ants_per_xaui'])
+
+        ig.add_item(name="xeng_acc_len",id=0x101F,
+            description="Number of spectra accumulated inside X engine. Determines minimum integration time and user-configurable integration time stepsize. X-engine correlator internals.",
+            shape=[],fmt=spead.mkfmt(('u',spead.ADDRSIZE)),
+            init_val=self.config['xeng_acc_len'])
+
+        ig.add_item(name="requant_bits",id=0x1020,
+            description="Number of bits after requantisation in the F engines (post FFT and any phasing stages).",
+            shape=[],fmt=spead.mkfmt(('u',spead.ADDRSIZE)),
+            init_val=self.config['feng_bits'])
+
+        ig.add_item(name="feng_pkt_len",id=0x1021,
+            description="Payload size of 10GbE packet exchange between F and X engines in 64 bit words. Usually equal to the number of spectra accumulated inside X engine. F-engine correlator internals.",
+            shape=[],fmt=spead.mkfmt(('u',spead.ADDRSIZE)),
+            init_val=self.config['10gbe_pkt_len'])
+
+        ig.add_item(name="rx_udp_port",id=0x1022,
+            description="Destination UDP port for X engine output.",
+            shape=[],fmt=spead.mkfmt(('u',spead.ADDRSIZE)),
+            init_val=self.config['rx_udp_port'])
+
+        ig.add_item(name="feng_udp_port",id=0x1023,
+            description="Destination UDP port for F engine data exchange.",
+            shape=[],fmt=spead.mkfmt(('u',spead.ADDRSIZE)),
+            init_val=self.config['10gbe_port'])
+
+        ig.add_item(name="rx_udp_ip_str",id=0x1024,
+            description="Destination IP address for X engine output UDP packets.",
+            shape=[-1],fmt=spead.STR_FMT,
+            init_val=self.config['rx_udp_ip_str'])
+
+        ig.add_item(name="feng_start_ip",id=0x1025,
+            description="F engine starting IP address.",
+            shape=[],fmt=spead.mkfmt(('u',spead.ADDRSIZE)),
+            init_val=self.config['10gbe_ip'])
+
+        ig.add_item(name="eng_rate",id=0x1026,
+            description="Target clock rate of processing engines (xeng).",
+            shape=[],fmt=spead.mkfmt(('u',spead.ADDRSIZE)),
+            init_val=self.config['x_eng_clk'])
 
         ig.add_item(name="x_per_fpga",id=0x1041,
             description="Number of X engines per FPGA.",
-            shape=[],fmt=spead.mkfmt(('u',16)),
+            shape=[],fmt=spead.mkfmt(('u',spead.ADDRSIZE)),
             init_val=self.config['x_per_fpga'])
-        ig.add_item(name="n_ants_per_xaui",id=0x1042,
-            description="Number of antennas' data per XAUI link.",
-            shape=[],fmt=spead.mkfmt(('u',32)),
-            init_val=self.config['n_ants_per_xaui'])
 
         ig.add_item(name="ddc_mix_freq",id=0x1043,
             description="Digital downconverter mixing freqency as a fraction of the ADC sampling frequency. eg: 0.25. Set to zero if no DDC is present.",
@@ -868,50 +971,15 @@ class Correlator:
             shape=[],fmt=spead.mkfmt(('u',spead.ADDRSIZE)),
             init_val=self.config['ddc_decimation'])
 
-        ig.additem(name="xeng_acc_len",id=0x101F,
-            description="Number of spectra accumulated inside X engine. Determines minimum integration time and user-configurable integration time stepsize. X-engine correlator internals.",
-            shape=[],fmt=spead.mkfmt(('u',spead.ADDRSIZE)),
-            init_value=self.config['xeng_acc_len'])
-
-        ig.additem(name="requant_bits",id=0x1020,
-            description="Number of bits after requantisation in the F engines (post FFT and any phasing stages).",
-            shape=[],fmt=spead.mkfmt(('u',spead.ADDRSIZE)),
-            init_value=self.config['feng_bits'])
-
-        ig.additem(name="feng_pkt_len",id=0x1021,
-            description="Payload size of 10GbE packet exchange between F and X engines in 64 bit words. Usually equal to the number of spectra accumulated inside X engine. F-engine correlator internals.",
-            shape=[],fmt=spead.mkfmt(('u',spead.ADDRSIZE)),
-            init_value=self.config['10gbe_pkt_len'])
-
-        ig.add_item(name="rx_udp_port",id=0x1022,
-            description="Destination UDP port for X engine output.",
-            shape=[],fmt=spead.mkfmt(('u',16)),
-            init_val=self.config['rx_udp_port'])
-
-        ig.add_item(name="feng_udp_port",id=0x1023,
-            description="Destination UDP port for F engine data exchange.",
-            shape=[],fmt=spead.mkfmt(('u',32)),
-            init_val=self.config['10gbe_port'])
-
-        ig.add_item(name="rx_udp_ip_str",id=0x1024,
-            description="Destination IP address for X engine output UDP packets.",
-            shape=[-1],fmt=spead.STR_FMT,
-            init_val=self.config['rx_udp_ip_str'])
-
-        ig.add_item(name="feng_start_ip",id=0x1025,
-            description="F engine starting IP address.",
-            shape=[],fmt=spead.mkfmt(('u',32)),
-            init_val=self.config['10gbe_ip'])
-
-        ig.add_item(name="eng_rate",id=0x1026,
-            description="Target clock rate of processing engines (xeng).",
-            shape=[],fmt=spead.mkfmt(('u',32)),
-            init_val=self.config['x_eng_clk'])
-
         ig.add_item(name="adc_bits",id=0x1045,
             description="ADC quantisation (bits).",
-            shape=[],fmt=spead.mkfmt(('u',32)),
+            shape=[],fmt=spead.mkfmt(('u',spead.ADDRSIZE)),
             init_val=self.config['adc_bits'])
+
+        ig.add_item(name="xeng_out_bits_per_sample",id=0x1048,
+            description="The number of bits per value of the xeng accumulator output. Note this is for a single value, not the combined complex size.",
+            shape=[],fmt=spead.mkfmt(('u',spead.ADDRSIZE)),
+            init_val=self.config['xeng_sample_bits'])
 
         tx.send_heap(ig.get_heap())
 
@@ -924,7 +992,7 @@ class Correlator:
         ig=spead.ItemGroup()
         ig.add_item(name='sync_time',id=0x1027,
             description="Time at which the system was last synchronised (armed and triggered by a 1PPS) in seconds since the Unix Epoch.",
-            shape=[],fmt=spead.mkfmt(('u',32)),
+            shape=[],fmt=spead.mkfmt(('u',spead.ADDRSIZE)),
             init_val=self.config['sync_time'])
 
         tx.send_heap(ig.get_heap())
@@ -936,10 +1004,17 @@ class Correlator:
         tx=spead.Transmitter(spead.TransportUDPtx(self.config['rx_udp_ip_str'],self.config['rx_udp_port']))
         ig=spead.ItemGroup()
 
+        if self.config['xeng_sample_bits'] != 32: raise RuntimeError("Invalid bitwidth of X engine output. You specified %i, but I'm hardcoded for 32."%self.config['xeng_sample_bits'])
+
         for x in range(self.config['n_xeng']):
+            ig.add_item(name=('timestamp%i'%x), id=0x1536+x,
+                description='Timestamp of start of this integration. 48 bit uint counting ADC samples since last sync (sync_time, id=0x1027).',
+                shape=[], fmt=spead.mkfmt(('u',spead.ADDRSIZE)),
+                init_val=0)
+
             ig.add_item(name=("xeng_raw%i"%x),id=(0x2048+x),
                 description="Raw data for xengine %i out of %i. Frequency channels are split amonst xengines. Frequencies are distributed to xengines in a round-robin fashion, starting with engine 0. Data from all X engines must thus be combed or interleaved together to get continuous frequencies. Each xengine calculates all baselines (n_bls given by SPEAD ID 0x100B) for a given frequency channel. For a given baseline, -SPEAD ID 0x1040- stokes parameters are calculated (nominally 4 since xengines are natively dual-polarisation; software remapping is required for single-baseline designs). Each stokes parameter consists of a complex number (two real and imaginary unsigned integers)."%(x,self.config['n_xeng']),
-                ndarray=(np.dtype(np.uint32),(self.config['n_chans']/self.config['n_xeng'],self.config['n_bls'],self.config['n_stokes'],2)))
+                ndarray=(numpy.dtype(numpy.uint32),(self.config['n_chans']/self.config['n_xeng'],self.config['n_bls'],self.config['n_stokes'],2)))
 
         tx.send_heap(ig.get_heap())
 
