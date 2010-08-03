@@ -4,8 +4,9 @@
 Reads the values of the RMS amplitude accumulators on the ibob through the X engine's XAUI connection.\n
 
 Revisions:
-1.2 JRM Support any number of antennas together with F engine 305 and X engine rev 322 and later.\n
-1.1 JRM Requires F engine rev 302 or later and X engine rev 308 or later.\n
+1.21 PVP Fix filename in OptionParser section.
+1.20 JRM Support any number of antennas together with F engine 305 and X engine rev 322 and later.\n
+1.10 JRM Requires F engine rev 302 or later and X engine rev 308 or later.\n
 
 '''
 import corr, time, numpy, struct, sys, logging
@@ -30,23 +31,21 @@ if __name__ == '__main__':
     from optparse import OptionParser
 
     p = OptionParser()
-    p.set_usage('corr_adc_amplitudes.py [options] CONFIG FILE')
-    p.add_option('-v', '--verbose', dest='verbose', action='store_true',
-        help='Print raw output.')
+    p.set_usage('corr_adc_ampl.py [options] CONFIG FILE')
+    p.add_option('-v', '--verbose', dest='verbose', action='store_true', help='Print raw output.')
     p.set_description(__doc__)
     opts, args = p.parse_args(sys.argv[1:])
 
-
     if args==[]:
-        print 'Please specify a configuration file! \nExiting.'
+        print 'Please specify a configuration file!\nExiting.'
         exit()
 
 lh=corr.log_handlers.DebugLogHandler()
 
 try:
-    print 'Connecting...',
+    print 'Connecting to F-engines using config file %s...'%args[0],
     c=corr.corr_functions.Correlator(args[0],lh)
-    for s,server in enumerate(c.fsrvs): c.floggers[s].setLevel(10)
+    for s, server in enumerate(c.fsrvs): c.floggers[s].setLevel(10)
     print 'done.'
 
     while(True):
