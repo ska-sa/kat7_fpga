@@ -366,15 +366,15 @@ class FpgaClient(BlockingClient):
         else:
             self.write(device_name, data, offset*4)
 
-    def read_uint(self, device_name):
-        """As in .read_int(), but unpack into 32 bit unsigned int.
+    def read_uint(self, device_name,offset=0):
+        """As in .read_int(), but unpack into 32 bit unsigned int. Optionally read at an offset 32-bit register.
 
            @see read_int
            @param self  This object.
            @param device_name  String: name of device / register to read from.
            @return  Integer: value read.
            """
-        data = self.read(device_name, 4, 0)
+        data = self.read(device_name, 4, offset*4)
         return struct.unpack(">I", data)[0]
 
     def stop(self):
@@ -492,17 +492,17 @@ class FpgaClient(BlockingClient):
          """Checks QDR status (PHY ready and Calibration). NOT TESTED.
             \n@param qdr integer QDR controller to query.
             \n@return dictionary of calfail and phyrdy boolean responses."""
-         #offset 0 is reset (write 0x111111... to reset). offset 4, bit 0 is phyrdy. bit 1 is calfail.
+         #offset 0 is reset (write 0x111111... to reset). offset 4, bit 0 is phyrdy. bit 8 is calfail.
          assert((type(qdr)==int))
-         data = struct.unpack(">I",self.read('qdr%i_ctrl'%qdr, 4, 4)[0])
-         return {'phyrdy':bool(qdr_ctrl&0x01),'calfail':bool(qdr_ctrl&0x02)}
+         qdr_ctrl = struct.unpack(">I",self.read('qdr%i_ctrl'%qdr, 4, 4))[0]
+         return {'phyrdy':bool(qdr_ctrl&0x01),'calfail':bool(qdr_ctrl&(1<<8))}
 
     def qdr_rst(self,qdr):
          """Performs a reset of the given QDR controller (tries to re-calibrate). NOT TESTED.
             \n@param qdr integer QDR controller to query.
             \n@returns nothing."""
          assert((type(qdr)==int))
-         self.write_uint('qdr%i_ctrl'%qdr,0xffffffff)
+         self.write_int('qdr%i_ctrl'%qdr,0xffffffff,blindwrite=True)
 
     def get_snap(self,dev_name,brams,man_trig=False,man_valid=False,wait_period=1,offset=-1,       circular_capture=False):
         """Grabs all brams from a single snap block on this FPGA device.\n

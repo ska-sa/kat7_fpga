@@ -49,6 +49,7 @@ class CorrConf:
         self.config['rev_pol_map']={0:'x',1:'y'}
         self.config['pols']=['x','y']
         self.config['n_pols']=2
+        self.config['xeng_sample_bits']=32
 
         #get the server stuff
         self.read_int('katcp','katcp_port')
@@ -90,6 +91,7 @@ class CorrConf:
         self.config['n_xeng']=self.config['x_per_fpga']*len(self.config['servers_x'])
         self.config['n_feng']=self.config['n_ants']
         self.config['f_per_fpga']=self.config['n_feng']/len(self.config['servers_f'])
+        self.config['n_accs']=self.config['acc_len']*self.config['xeng_acc_len']
 
         self.config['n_bls']=self.config['n_ants']*(self.config['n_ants']+1)/2
         if self.config['ddc_mix_freq']<=0:
@@ -133,7 +135,7 @@ class CorrConf:
                 for pol in ['x','y']:
                     ant_eq_str=self.get_line('equalisation','eq_poly_%i%c'%(ant,pol))
                     if (ant_eq_str):
-                        self.config['eq_poly_%i%c'%(ant,pol)]=[coef for coef in ant_eq_str.split(LISTDELIMIT)]
+                        self.config['eq_poly_%i%c'%(ant,pol)]=[int(coef) for coef in ant_eq_str.split(LISTDELIMIT)]
                     else:
                         raise RuntimeError('ERR eq_poly_%i%c'%(ant,pol))
 
