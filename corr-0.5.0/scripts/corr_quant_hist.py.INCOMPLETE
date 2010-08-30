@@ -2,20 +2,13 @@
 
 '''
 Plots a histogram of the ADC values from a specified antenna and pol.\n
-
-Revisions:
-2010-08-05: JRM: Mods to support variable snap block length.
-1.1 PVP Initial.\n
+\n
+Revisions:\n
+2010-08-06: JRM: Initial version based on corr_adc_hist.py from Paul.\n
 
 '''
-import matplotlib
-import time, corr, numpy, struct, sys, logging, pylab
+import matplotlib, time, corr, numpy, struct, sys, logging, pylab, os
 
-# what format are the snap names and how many are there per antenna
-snapName = 'adc_snap'
-snapCount = 2
-# what is the bram name inside the snap block
-bramName = 'bram'
 
 def exit_fail():
     print 'FAILURE DETECTED. Log entries:\n', lh.printMessages()
@@ -36,7 +29,7 @@ def exit_clean():
 if __name__ == '__main__':
     from optparse import OptionParser
     p = OptionParser()
-    p.set_usage('corr_adc_histogram.py [options] CONFIG FILE')
+    p.set_usage('corr_quant_hist.py [options] CONFIG FILE')
     p.add_option('-v', '--verbose', dest = 'verbose', action = 'store_true', help = 'Print raw output.')
     p.add_option('-a', '--antenna', dest = 'antAndPol', action = 'store', help = 'Specify an antenna and pol for which to get ADC histograms. 3x will give pol x for antenna three. 27y will give pol y for antenna 27. 3 on its own will give both \'x\' and \'y\' for antenna three. 3x,27y will do pol \'x\' of antenna 3 and pol \'y\' of antenna 27.')
     p.add_option('-c', '--compare', dest = 'comparePlots', action = 'store_true', help = 'Compare plots directly using the same y-axis for all plots.')
@@ -74,10 +67,18 @@ def getUnpackedData(requiredPol):
     # which ADC is it on that FPGA?
     requiredFengInput = antLocation[4]
     # get the data
-    packedData = c.ffpgas[requiredFpga].get_snap(snapName + str(requiredFengInput), [bramName])
+    dev_name='quant_snap%i'%requiredFengInput
+    binary_point = c.config['feng_fix_pnt_pos']
+
+    bram_dmp=c.ffpgas[requiredFpga].get_snap(dev_name,['bram'],man_trig=True,wait_period=1)
     # unpack the data
-    unpackedBytes = numpy.array(struct.unpack('>%ib'%(packedData['length']*4), packedData[bramName]))#/float(packedData['length']*4)
-    return unpackedBytes, requiredFpga
+    pckd_8bit = struct.unpack('>%iB'%(bram_dmp['length']*4),bram_dmp['bram'])
+    unpacked_vals=[]
+    for val in pckd_8bit:
+        pol_r_bits = (val & ((2**8) - (2**4)))>>4
+        pol_i_bits = (val & ((2**4) - (2**0)))
+        unpacked_vals.append(float(((numpy.int8(pol_r_bits << 4)>> 4)))/(2**binary_point) + 1j * float(((numpy.int8(pol_i_bits << 4)>> 4)))/(2**binary_point))
+    return unpacked_vals, requiredFpga
 
 # make the log handler
 lh=corr.log_handlers.DebugLogHandler()
@@ -99,7 +100,7 @@ try:
 
     # set up the figure with a subplot for each polarisation to be plotted
     fig = matplotlib.pyplot.figure()
-    ax = fig.add_subplot(len(polList), 1, 1)
+    ax = fig.add_subplot(len(polList), 2, 1)
 
     # callback function to draw the data for all the required polarisations
     def drawDataCallback(comparePlots):
@@ -107,15 +108,25 @@ try:
         matplotlib.pyplot.clf()
         maxY = 0
         for pol in polList:
+            unpacked_vals, ffpga = getUnpackedData(pol)
             matplotlib.pyplot.subplot(len(polList), 1, counter)
-            unpackedData, ffpga = getUnpackedData(pol)
-            histData = pylab.histogram(unpackedData, range(-128,129))[0]
+            histData = pylab.histogram([val.real for val in unpacked_vals], range(-1,1))[0]
             maxY = max(maxY, max(histData))
-            matplotlib.pyplot.bar(range(-128,128), histData)
+            matplotlib.pyplot.bar(histData)
             if not comparePlots:
                 matplotlib.pyplot.ylim(ymax = max(histData))
-            matplotlib.pyplot.xticks(range(-130,131,10))
-            matplotlib.pyplot.title('ant(' + str(pol['antenna']) + ') pol(' + pol['pol'] + ') ffpga(' + str(ffpga) + ') max(' + str(max(histData)) + ')')
+            matplotlib.pyplot.xticks(range(-1,2,0.25))
+            matplotlib.pyplot.title('ant %i%s real'%(pol['antenna'],pol['pol']))
+
+
+            matplotlib.pyplot.subplot(len(polList), 2, counter)
+            histData = pylab.histogram([val.imag for val in unpacked_vals], range(-1,1))[0]
+            maxY = max(maxY, max(histData))
+            matplotlib.pyplot.bar(range(-1,1), histData)
+            if not comparePlots:
+                matplotlib.pyplot.ylim(ymax = max(histData))
+            matplotlib.pyplot.xticks(range(-1,1,0.25))
+            matplotlib.pyplot.title('ant %i%s imag'%(pol['antenna'],pol['pol']))
             counter = counter + 1
         if comparePlots:
             counter = 1

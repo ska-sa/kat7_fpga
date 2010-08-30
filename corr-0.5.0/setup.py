@@ -15,19 +15,11 @@ setup(name = 'corr',
     description = 'Interfaces to CASPER correlators',
     long_description = 'Interfaces to CASPER correlators.',
     license = 'GPL',
-    author = 'Aaron Parsons and Jason Manley',
-    author_email = 'aparsons at astron.berkeley.edu, jason_manley at hotmail.com',
+    author = 'Jason Manley',
+    author_email = 'jason_manley at hotmail.com',
     url = '',
     package_dir = {'corr':'src'},
     packages = ['corr'],
-    ext_modules = [
-        Extension('corr.rx',
-            globdir('src/rx/',
-                ['*.cpp','*.c']),
-            include_dirs = [numpy.get_include(), 'src/rx/include'],
-            libraries=['rt'],
-        )
-    ],
     scripts=glob.glob('scripts/*'),
 )
 

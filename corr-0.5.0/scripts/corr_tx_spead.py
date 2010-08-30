@@ -72,8 +72,8 @@ class CasperN_Packet:
         option3 = (1<<63) + (3<<40) + offset            #heap offset
         option4 = (1<<63) + (4<<40) + len(str_data)     #packet payload length
         #add timestamp and data:
-        option5 = (1<<63) + ((0x1600+xeng)<<40) + timestamp
-        option6 = (0<<63) + ((0x1800+xeng)<<40) + 0
+        option5 = (1<<63) + ((0x1536+xeng)<<40) + timestamp
+        option6 = (0<<63) + ((0x2048+xeng)<<40) + 0
 
         #print "PKT sending at timestamp %i for xeng %i at offset %i."%(timestamp,xeng,offset)
 
@@ -287,7 +287,7 @@ class CorrTX:
 
             #Now that we have collected all this integration's data, send the packets:
             for xnum in range(self.x_per_fpga):
-                print '[%6i] Grabbed %i vectors for X engine %i with timestamp %i (diff ~%4.2fs).'%(n_integrations,int_xeng_vectors[xnum], self.xeng[xnum], timestamp[xnum],realtime_diff[xnum])
+                print '[%6i] Grabbed %i vectors for X engine %i with timestamp %i (diff %4.2fs).'%(n_integrations,int_xeng_vectors[xnum], self.xeng[xnum], timestamp[xnum],realtime_diff[xnum])
                 data[xnum] = ''.join(data[xnum])
 
                 #n_bls=16*17/2

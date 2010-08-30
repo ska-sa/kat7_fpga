@@ -6,6 +6,8 @@ Author: Jason Manley
 Revision: 2008-02-08
 
 Revs:
+2010-08-05: JRM changed adc_clk to integer Hz (from float GHz)
+                added calc of timestamp scaling factors and misc other bits
 2010-06-28: JRM Added support for reconfigurable F engines (ie ROACH)
 2009-12-10: JRM Changed IP address formats to input strings, but return integers.
                 Added __setitem__, though it's volatile.
@@ -42,6 +44,10 @@ class CorrConf:
             f.close()
         return exists
 
+    def calc_int_time(self):
+        self.config['n_accs']=self.config['acc_len']*self.config['xeng_acc_len']
+        self.config['int_time']= float(self.config['n_chans'])*self.config['n_accs']/self.config['bandwidth']
+
     def read_all(self):
         if not self.file_exists():
             raise RuntimeError('Error opening config file')
@@ -63,7 +69,7 @@ class CorrConf:
         self.read_int('correlator','n_ants')
         self.read_int('correlator','fft_shift')
         self.read_int('correlator','acc_len')
-        self.read_float('correlator','adc_clk')
+        self.read_int('correlator','adc_clk')
         self.read_int('correlator','n_stokes')
         self.read_int('correlator','x_per_fpga')
         self.read_int('correlator','n_ants_per_xaui')
@@ -75,7 +81,7 @@ class CorrConf:
         self.read_int('correlator','10gbe_pkt_len')
         self.read_int('correlator','feng_bits')
         self.read_int('correlator','feng_fix_pnt_pos')
-        self.read_int('correlator','x_eng_clk')
+        self.read_int('correlator','xeng_clk')
         self.read_int('correlator','n_xaui_ports_per_xfpga')
         self.read_int('correlator','n_xaui_ports_per_ffpga')
         self.read_int('correlator','adc_bits')
@@ -88,22 +94,22 @@ class CorrConf:
         if self.config['n_ants']%len(self.config['servers_f']) != 0:
             raise RuntimeError("You have %i antennas, but %i F boards. That can't be right."%(self.config['n_ants'],len(self.config['servers_f'])))
 
+
         self.config['n_xeng']=self.config['x_per_fpga']*len(self.config['servers_x'])
         self.config['n_feng']=self.config['n_ants']
         self.config['f_per_fpga']=self.config['n_feng']/len(self.config['servers_f'])
-        self.config['n_accs']=self.config['acc_len']*self.config['xeng_acc_len']
-
         self.config['n_bls']=self.config['n_ants']*(self.config['n_ants']+1)/2
+
         if self.config['ddc_mix_freq']<=0:
             #We're dealing with a "real" PFB, either wideband or narrowband.
-            self.config['bandwidth']=self.config['adc_clk']*1000000000./2
-            self.config['center_freq']=self.config['adc_clk']*1000000000./4
-            self.config['int_time']= float(self.config['n_chans'])*self.config['xeng_acc_len']*self.config['acc_len']/(self.config['bandwidth'])
+            self.config['bandwidth']=self.config['adc_clk']/2.
+            self.config['center_freq']=self.config['adc_clk']/4.
         else:
             #We're dealing with a complex PFB with a DDC upfront.
-            self.config['bandwidth']=self.config['adc_clk']*1000000000./self.config['ddc_decimation']
-            self.config['center_freq']=self.config['adc_clk']*1000000000.*self.config['ddc_mix_freq']
-            self.config['int_time']= float(self.config['n_chans'])*self.config['xeng_acc_len']*self.config['acc_len']/(self.config['adc_clk']*1000000000./self.config['ddc_decimation'])
+            self.config['bandwidth']=float(self.config['adc_clk'])/self.config['ddc_decimation']
+            self.config['center_freq']=float(self.config['adc_clk'])*self.config['ddc_mix_freq']
+
+        self.calc_int_time()
 
         #get the receiver section:
         self.config['receiver']=dict()
@@ -121,6 +127,11 @@ class CorrConf:
         #self.read_int('equalisation','eq_brams_per_pol_interleave')
         
         self.read_str('correlator','adc_type')
+        self.config['adc_demux'] = {'katadc':4,'iadc':4}[self.config['adc_type']]
+        self.config['feng_clk'] = self.config['adc_clk']/self.config['adc_demux']
+        self.config['mcnt_scale_factor']=self.config['feng_clk']
+        self.config['timestamp_scale_factor']=self.config['bandwidth']/self.config['xeng_acc_len']
+
         if self.config['adc_type'] == 'katadc':
             for ant in range(self.config['n_ants']):
                 for pol in ['x','y']:
@@ -129,6 +140,8 @@ class CorrConf:
                         self.config['rf_gain_%i%c'%(ant,pol)]=int(ant_rf_gain)
                     else:
                         raise RuntimeError('ERR rf_gain_%i%c'%(ant,pol))
+
+        if not self.config['eq_default'] in ['poly','coeffs']: raise RuntimeError('ERR invalid eq_default')
 
         if self.config['eq_default'] == 'poly':
             for ant in range(self.config['n_ants']):
@@ -139,17 +152,14 @@ class CorrConf:
                     else:
                         raise RuntimeError('ERR eq_poly_%i%c'%(ant,pol))
 
-        elif self.config['eq_default'] == 'coef':
-            for ant in range(self.config['n_ants']):
-                for pol in ['x','y']:
-                    ant_eq_str=self.get_line('equalisation','eq_coef_%i%c'%(ant,pol))
-                    if (ant_eq_str):
-                        self.config['eq_coef_%i%c'%(ant,pol)]=eval(ant_eq_str)
-                    else:
-                        raise RuntimeError('ERR eq_coef_%i%c'%(ant,pol))
-        else:
-            raise RuntimeError('ERR invalid eq_default')
-        
+        for ant in range(self.config['n_ants']):
+            for pol in ['x','y']:
+                try: ant_eq_str=self.get_line('equalisation','eq_coeffs_%i%c'%(ant,pol))
+                except: pass
+                if (ant_eq_str):
+                    self.config['eq_coeffs_%i%c'%(ant,pol)]=eval(ant_eq_str)
+                elif self.config['eq_default'] == 'coeffs': raise RuntimeError('ERR eq_coeffs_%i%c'%(ant,pol))
+
     def write(self,section,variable,value):
         self.config[variable]=value
         self.cp[section][variable]=str(value)

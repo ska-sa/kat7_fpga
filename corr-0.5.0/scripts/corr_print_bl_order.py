@@ -1,8 +1,10 @@
 #! /usr/bin/env python
 """Prints the output baseline order for this X engine design.
-Author: Jason Manley"""
+Author: Jason Manley
+Revs:
+2010-08-10  JRM Mods to use new corr package layout."""
 
-import corr.sim_cn_data,os,sys
+import corr.sim,os,sys
 
 if __name__ == '__main__':
     from optparse import OptionParser
@@ -20,10 +22,9 @@ if __name__ == '__main__':
     config_status = config.read_all()
     print '\n\nParsing config file %s...'%(args[0])
     sys.stdout.flush()
-n_bls=config['n_ants']*(config['n_ants']+1)/2
-print 'Baseline ordering for %i antenna system:'%config['n_ants']
+print 'Baseline ordering for %i antenna system (%i baselines):'%(config['n_ants'],config['n_bls'])
 
-for i in range(n_bls):
-    print 't%i:'%i,corr.sim_cn_data.bl2ij(corr.sim_cn_data.get_bl_order(config['n_ants'])[i])
+for t,bl in enumerate(corr.sim.get_bl_order(config['n_ants'])):
+    print 't%i:'%t,bl
 
 print "done"
