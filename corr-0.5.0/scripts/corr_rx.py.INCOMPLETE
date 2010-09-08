@@ -1,0 +1,269 @@
+#!/usr/bin/python
+"""Script for capturing data from a CASPER packetised correlator, recording MIRIAD files. Compatible with SPEAD rev 4."""
+import corr,ephem,sys,spead,time,os
+import aipy as a, numpy as n
+
+def start_uv_file(filename, aa, pols, nchan, sfreq, sdf, inttime):
+    uv = a.miriad.UV(filename, status='new')
+    uv._wrhd('obstype','mixed-auto-cross')
+    uv._wrhd('history','CORR-DACQ: created file.\n')
+    uv.add_var('telescop','a'); uv['telescop'] = 'PAPER'
+    uv.add_var('operator','a'); uv['operator'] = 'PAPER'
+    uv.add_var('version' ,'a'); uv['version'] = '0.0.1'
+    uv.add_var('epoch'   ,'r'); uv['epoch'] = 2000.
+    uv.add_var('source'  ,'a'); uv['source'] = 'zenith'
+    uv.add_var('latitud' ,'d'); uv['latitud'] = aa.lat
+    uv.add_var('dec'     ,'d'); uv['dec'] = aa.lat
+    uv.add_var('obsdec'  ,'d'); uv['obsdec'] = aa.lat
+    uv.add_var('longitu' ,'d'); uv['longitu'] = aa.long
+    uv.add_var('npol'    ,'i'); uv['npol'] = len(pols)
+    uv.add_var('nspect'  ,'i'); uv['nspect'] = 1
+    uv.add_var('nants'   ,'i'); uv['nants'] = len(aa)
+    uv.add_var('antpos'  ,'d')
+    antpos = n.array([ant.pos for ant in aa], dtype=n.double)
+    uv['antpos'] = antpos.transpose().flatten()
+    uv.add_var('sfreq'   ,'d'); uv['sfreq'] = sfreq
+    uv.add_var('freq'    ,'d'); uv['freq'] = sfreq
+    uv.add_var('restfreq','d'); uv['freq'] = sfreq
+    uv.add_var('sdf'     ,'d'); uv['sdf'] = sdf
+    uv.add_var('nchan'   ,'i'); uv['nchan'] = nchan
+    uv.add_var('nschan'  ,'i'); uv['nschan'] = nchan
+    uv.add_var('inttime' ,'r'); uv['inttime'] = float(inttime)
+    # These variables just set to dummy values
+    uv.add_var('vsource' ,'r'); uv['vsource'] = 0.
+    uv.add_var('ischan'  ,'i'); uv['ischan'] = 1
+    uv.add_var('tscale'  ,'r'); uv['tscale'] = 0.
+    uv.add_var('veldop'  ,'r'); uv['veldop'] = 0.
+    # These variables will get updated every spectrum
+    uv.add_var('coord'   ,'d')
+    uv.add_var('time'    ,'d')
+    uv.add_var('lst'     ,'d')
+    uv.add_var('ra'      ,'d')
+    uv.add_var('obsra'   ,'d')
+    uv.add_var('baseline','r')
+    uv.add_var('pol'     ,'i')
+    return uv
+
+
+
+def exit_fail():
+    print 'FAILURE DETECTED. Log entries:\n',lh.printMessages()
+    print "Unexpected error:", sys.exc_info()
+    try:
+        c.disconnect_all()
+    except: pass
+    try:
+        rx.stop()
+    except: pass
+    raise
+    exit()
+
+def exit_clean():
+    try:
+        c.disconnect_all()
+    except: pass
+    try:
+        rx.stop()
+    except: pass
+    exit()
+
+class DataRec():
+    def __init__(self, aa, pols=['xx','yy','xy','yx'],
+            nchan=2048, sfreq=0.121142578125, sdf=7.32421875e-05,
+            inttime=14.3165578842, t_per_file=ephem.hour, acc_len=1024*128):
+        # Define a file-writing callback that starts/ends files when
+        # appropriate and updates variables
+        self.uv = None
+        self.filestart = 0.
+        self.current_time = 0
+        self.t_per_file = t_per_file
+
+        def filewrite_callback(i,j,pol,t,data,flags):
+            """ Update time and baseline calculations if time changes, possibly ending a file and starting a new one if necessary"""
+
+            if (t != self.current_time):
+                self.current_time = t
+
+                if (t > (self.filestart + self.t_per_file)) or self.uv == None:
+                    if self.uv != None:
+                        del(self.uv)
+                        print 'Ending file:',
+                        print self.fname, '->', self.fname.replace('.tmp','')
+                        os.rename(self.fname, self.fname.replace('.tmp',''))
+                    self.fname = 'zen.%07.5f.uv.tmp' % t
+                    print a.phs.juldate2ephem(t),
+                    print 'Starting file:', self.fname
+                    self.uv = start_uv_file(self.fname, aa, pols=pols,
+                        nchan=nchan, sfreq=sfreq, sdf=sdf, inttime=inttime)
+                    self.filestart = t
+
+                aa.set_jultime(t)
+                lst = aa.sidereal_time()
+                self.uv['lst'] = lst
+                self.uv['ra'] = lst
+                self.uv['obsra'] = lst
+
+            self.uv['pol'] = a.miriad.str2pol[pols[pol]]
+            crd = aa[j].pos - aa[i].pos
+            preamble = (crd, t, (i,j))
+            self.uv.write(preamble, data, flags)
+            #print 'flags:',flags
+
+
+    def set_start_time(self, start_jd, tscale):
+        self.start_jd = start_jd
+        self.tscale = tscale
+
+    def stop(self):
+        if self.uv != None:
+            del(self.uv)
+            print 'Ending file:',
+            print self.fname, '->', self.fname.replace('.tmp','')
+            os.rename(self.fname, self.fname.replace('.tmp',''))
+
+
+def process_integration(integration):
+    print 'trying to unpack'
+    #unpack the integration
+
+if __name__ == '__main__':
+    from optparse import OptionParser
+
+    p = OptionParser()
+    p.set_usage('corr_rx_miriad.py [options] CONFIG_FILE')
+    p.set_description(__doc__)
+    p.add_option('-v', '--verbose', dest='verbose', action='store_true',
+        help='Print raw contents.')
+    #p.add_option('-s', '--bufferslots', dest='bufferslots', type='int', default=10240,
+    #    help='Number of buffer slots to allocate. Default 10240.')
+    #p.add_option('-w', '--bufferwindows', dest='bufferwindows', type='int', default=4,
+    #    help='Number of simultaneous buffer windows. Default 4.')
+    p.add_option('-t', '--t_per_file', dest='t_per_file', type='int', default=2,
+        help='Length of time in minutes to capture data before starting a new file. Default 2 min.')
+
+    opts, args = p.parse_args(sys.argv[1:])
+
+    if args==[]:
+        print 'Please specify a configuration file! \nExiting.'
+        exit()
+
+lh=corr.log_handlers.DebugLogHandler()
+
+try:
+    print 'Connecting...',
+    c=corr.corr_functions.Correlator(args[0],lh)
+    for logger in c.xloggers: logger.setLevel(10)
+    print 'done.'
+    
+    if c.config['n_pols']==2 and c.config['pols']==['x','y']:
+        pols=['xx','yy','xy','yx']
+    else:
+        raise RuntimeError("You polarisation configuration is not supported.")
+
+    n_xeng = c.config['n_xeng']
+    port = c.config['rx_udp_port']
+    n_chans=c.config['n_chans']
+    adc_clk=c.config['adc_clk']
+    int_time = c.config['int_time'] #integration time in seconds
+    acc_len = c.config['n_accs'] # number of accumulations
+    bandwidth = float(c.config['bandwidth'])/1000000000 #system bandwidth in GHz
+    sdf = bandwidth/n_chans #change in frequency per channel in GHz
+    sfreq = sdf/2  # sky frequency of (center of) first channel in window in GHz
+
+    location=0,0,0 #GPS co-ordinates of this array
+    ants=[(ant,ant,ant) for ant in range(c.config['n_ants'])] #this is supposed to label the location of the antennas?
+    freqs = np.arange(c.config['n_chans'], dtype=np.float) * sdf + sfreq
+    beam = a.phs.Beam(freqs)
+    ants = [a.phs.Antenna(ant[0],ant[1],ant[2],beam) for ant in ants]
+    aa = a.phs.AntennaArray(ants=ants, location=location)
+
+    t_per_file=ephem.minute*opts.t_per_file
+
+    #n_windows_to_buffer=opts.bufferwindows
+    #n_bufferslots=opts.bufferslots
+    max_payload_len=8192
+
+    integration={'time':-1,'data':''}
+
+    rx=DataRec(aa, pols=pols,
+        nchan=n_chans, sfreq=sfreq, sdf=sdf,
+        inttime=int_time, t_per_file=t_per_file,
+        acc_len=acc_len)
+
+    print 'RX: Initializing...'
+    t = spead.TransportUDPrx(port)
+    ig = spead.ItemGroup()
+    for heap in spead.iterheaps(t):
+        #print spead.readable_heap(heap)
+        ig.update(heap)
+        print 'Got heap %i...'%(ig.heap_cnt),
+        xeng=-1
+        tcnt=-1
+        process_heap=False
+
+        for name in ig.keys():
+            item = ig.get_item(name)
+            if not item._changed: continue
+
+            #print '   ', name
+            #print '      Description: ', item.description
+            #print '           Format: ', item.format
+            #print '            Shape: ', item.shape
+            #print '            Value: ', ig[name]
+
+            #figure out what data we received:
+            if name.startswith('xeng_raw'):
+                xeng = int(name[8:])
+                print 'for xeng %i'%xeng,
+                process_heap==True
+            if name == 'sync_time':
+                print 'New sync time!'
+                sync_time = ig[name]
+
+        #check that we received this packet from a sensible x engine:
+        if xeng >= n_xeng:
+            print "Invalid xengine %i. There are only %i xengines in this design.  "%(xeng,n_xeng)
+            process_heap=False
+
+        if process_heap:
+            #check that we received the same timestamp for all X engines:
+            for i in range(n_xeng):
+                try: 
+                    if ig['timestamp%i',xeng] != ig['timestamp0']: 
+                        process_heap=False
+                        print 'Timestamp%i not matching, waiting...'%xeng
+                    tcnt = ig['timestamp0'%xeng]
+                except: 
+                    print 'Unable to find key timestamp%i.'%xeng
+                    process_heap==False
+
+        if process_heap:
+            #process_integration(integration)
+            seconds_since_sync = tcnt/adc_rate 
+            time = seconds_since_sync + sync_time
+        
+            #t is julian date. ephem measures days since noon, 31st Dec 1899 (!random!), so we need  an offset from uni time:
+            t = a.phs.ephem2juldate((time + 2209032000)*ephem.second)
+            print 'Collating data for xeng %i at time %i.'%(xeng,t)
+            if integration['time'] > t: 
+                print 'Ignoring this heap because the timestamp is old.'
+            elif integration['time'] < t:
+                print 'new timestamp received'
+                #process_integation(integration)
+                integration['time'] = t
+                integration['data'] = np.zeros(n_chans)
+
+    #interleave the data here:
+    integration['data'][xeng::n_xeng] = data
+
+    
+    print 'RX: Done.'
+
+
+except KeyboardInterrupt:
+    exit_clean()
+except:
+    exit_fail()
+
+exit_clean()
+

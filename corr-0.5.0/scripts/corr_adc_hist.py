@@ -4,6 +4,7 @@
 Plots a histogram of the ADC values from a specified antenna and pol.\n
 
 Revisions:
+2010-08-05: JRM: Mods to support variable snap block length.
 1.1 PVP Initial.\n
 
 '''
@@ -74,11 +75,8 @@ def getUnpackedData(requiredPol):
     requiredFengInput = antLocation[4]
     # get the data
     packedData = c.ffpgas[requiredFpga].get_snap(snapName + str(requiredFengInput), [bramName])
-    if(packedData['length'] != 2048):
-        print 'Expected 2048 words, got ' + str(packedData['length']) + " for antenna(" + str(requiredPol['antenna']) + "), polarisation(" + requiredPol['pol'] + "). Failing...\n"
-        exit_fail()
     # unpack the data
-    unpackedBytes = struct.unpack('>8192b', packedData[bramName])
+    unpackedBytes = numpy.array(struct.unpack('>%ib'%(packedData['length']*4), packedData[bramName]))#/float(packedData['length']*4)
     return unpackedBytes, requiredFpga
 
 # make the log handler
@@ -96,7 +94,7 @@ try:
     # make the correlator object
     print 'Connecting to correlator...',
     c=corr.corr_functions.Correlator(args[0], lh)
-    for s,server in enumerate(c.fsrvs): c.floggers[s].setLevel(10)
+    for logger in c.floggers: logger.setLevel(10)
     print 'done.'
 
     # set up the figure with a subplot for each polarisation to be plotted

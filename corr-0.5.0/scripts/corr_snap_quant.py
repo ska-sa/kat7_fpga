@@ -17,7 +17,7 @@ Revisions:
                 Fixed number of bits calculation
 
 '''
-import corr, time, numpy, struct, sys, logging, pylab
+import corr, time, numpy, struct, sys, logging, pylab,matplotlib
 
 def exit_fail():
     print 'FAILURE DETECTED. Log entries:\n',lh.printMessages()
@@ -35,6 +35,49 @@ def exit_clean():
     except: pass
     exit()
 
+def drawDataCallback(acc,n_accs):
+        matplotlib.pyplot.clf()
+        maxY = 0
+        matplotlib.pyplot.subplot(1, 1,1)
+        unpackedData,n_accs = get_data(acc,n_accs)
+        matplotlib.pyplot.plot(numpy.divide(unpackedData,n_accs))
+        #matplotlib.pyplot.xticks(range(0,1024,10))
+        matplotlib.pyplot.xlim(0,c.config['n_chans'])
+        matplotlib.pyplot.title('Quantiser amplitude output for input %i %s, averaged over %i spectra.'%(ant,pol,n_accs))
+        matplotlib.pyplot.xlabel('Frequency channel')
+        matplotlib.pyplot.ylabel('Average level')
+        #fig.canvas.draw()
+        fig.canvas.manager.window.after(100, drawDataCallback,unpackedData,n_accs)
+   
+def get_data(acc,n_accs):
+    print 'Integrating data %i...'%n_accs,
+    print ' Grabbing data off snap blocks...',
+    bram_dmp=c.ffpgas[ffpga_n].get_snap(dev_name,['bram'],man_trig=man_trigger,wait_period=2)
+    print 'done.'
+
+    print ' Unpacking bram contents...',
+    sys.stdout.flush()
+    pckd_8bit = struct.unpack('>%iB'%(bram_dmp['length']*4),bram_dmp['bram'])
+    unpacked_vals=[]
+    for val in pckd_8bit:
+        pol_r_bits = (val & ((2**8) - (2**4)))>>4
+        pol_i_bits = (val & ((2**4) - (2**0)))
+        unpacked_vals.append(float(((numpy.int8(pol_r_bits << 4)>> 4)))/(2**binary_point) + 1j * float(((numpy.int8(pol_i_bits << 4)>> 4)))/(2**binary_point))
+    print 'done.'
+
+    print ' Accumulating...', 
+    for i,val in enumerate(unpacked_vals):
+        freq=i%c.config['n_chans']
+        acc[freq]+=abs(val)
+        if opts.verbose:
+            print '[%5i] [Freq %4i] %2.2f + %2.2f (summed amplitude %3.2f)'%(i,freq,val.real,val.imag,acc[freq])
+
+    n_accs += (len(unpacked_vals)/c.config['n_chans'])
+    print 'done.'
+
+    return (acc,n_accs)
+
+    
 
 if __name__ == '__main__':
     from optparse import OptionParser
@@ -92,43 +135,18 @@ try:
     print 'Looking at input %i on %s.'%(feng_input,c.fsrvs[ffpga_n])
     dev_name='quant_snap%i'%feng_input
 
-    print 'Grabbing data off snap blocks...',
-    bram_dmp=c.ffpgas[ffpga_n].get_snap(dev_name,['bram'],man_trig=man_trigger,wait_period=2)
-    print 'done.'
-
-    print 'Unpacking bram contents...',
-    sys.stdout.flush()
-
-    pckd_8bit = struct.unpack('>%iB'%(bram_dmp['length']*4),bram_dmp['bram'])
-
-    unpacked_vals=[]
-    for val in pckd_8bit: 
-        pol_r_bits = (val & ((2**8) - (2**4)))>>4
-        pol_i_bits = (val & ((2**4) - (2**0)))
-        unpacked_vals.append(float(((numpy.int8(pol_r_bits << 4)>> 4)))/(2**binary_point) + 1j * float(((numpy.int8(pol_i_bits << 4)>> 4)))/(2**binary_point))
-    print 'done.'
-
-    print 'Analysing packets...'
-
     acc=numpy.zeros((c.config['n_chans'],))
+    n_accs=0
 
-    for i,val in enumerate(unpacked_vals): 
-        freq=i%c.config['n_chans']
-        acc[freq]+=abs(val)
-        if opts.verbose:
-            print '[%5i] [Freq %4i] %2.2f + %2.2f (summed amplitude %3.2f)'%(i,freq,val.real,val.imag,acc[freq]) 
+    # set up the figure with a subplot for each polarisation to be plotted
+    fig = matplotlib.pyplot.figure()
+    ax = fig.add_subplot(1, 1, 1)
 
-    n_accs = (len(unpacked_vals)/c.config['n_chans'])
-    acc=numpy.sqrt(acc/n_accs)
+    # start the process
+    fig.canvas.manager.window.after(100, drawDataCallback,acc,n_accs)
+    matplotlib.pyplot.show()
+    print 'Plot started.'
 
-    if not opts.noplot:
-        pylab.plot(acc)
-        pylab.title('Quantiser amplitude output for input %i %s, averaged over %i spectra.'%(ant,pol,n_accs))
-        pylab.xlim(0,c.config['n_chans'])
-        pylab.xlabel('Frequency channel')
-        pylab.ylabel('Average level')
-        pylab.show()     
-        
 
 except KeyboardInterrupt:
     exit_clean()

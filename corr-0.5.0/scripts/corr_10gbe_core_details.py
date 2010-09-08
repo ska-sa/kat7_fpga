@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 '''
-Grabs the contents of "snap_gbe_tx" for analysis.
+Prints the details of the 10GbE cores on all the X engines.
 Assumes the correlator is already initialsed and running etc.
 Revisions
 2010-07-23  JRM Mods to use corr-0.5.0

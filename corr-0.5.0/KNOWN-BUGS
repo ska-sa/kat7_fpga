@@ -1,0 +1,5 @@
+vacc: add check to see if already armed (issue warning as appropriate) and issue vacc_rst in order to force rearm.make sure we're putting a posedge into arm, and that it idles low.
+include baseline ordering in SPEAD data.
+spead data issue: must not tx rf_gain for non-katadcs.
+
+

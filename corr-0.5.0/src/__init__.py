@@ -17,5 +17,5 @@ ver0.4.2: 2010-04-02
     *) cleanup of some functions.
 
 """
-import cn_conf, sim, katcp_wrapper, log_handlers, corr_functions, rx, dacq
+import cn_conf, sim, katcp_wrapper, log_handlers, corr_functions
 

@@ -54,12 +54,18 @@ try:
     for fn,feng in enumerate(c.fsrvs):
         print '\t %s (%i MHz)'%(feng,clk_check[fn])
 
+    pps_check = c.check_feng_clks()
+    print "F engine clock integrity: %s."%{True: 'Pass', False: "FAIL!"}[pps_check]
+    if not pps_check: print c.check_feng_clk_freq(verbose=True)
+
     lookup={'adc_overrange': 'ADC RF input overrange.',
             'ct_error': 'Corner-turner error.',
             'fft_overrange': 'Overflow in the FFT.',
             'quant_overrange': 'Quantiser overrange.',
             'xaui_lnkdn': 'XAUI link is down.',
             'xaui_over': "XAUI link's TX buffer is overflowing"}
+
+    time.sleep(2)
 
     #clear the screen:
     print '%c[2J'%chr(27)
@@ -70,7 +76,6 @@ try:
         loopback_ok=c.check_loopback_mcnt() 
         mcnts = c.mcnt_current_get()
         status = c.feng_status_get_all()
-        pps_check = c.check_feng_clk_freq()
         uptime = c.feng_uptime()
         fft_shift = c.fft_shift_get_all()
         
@@ -95,8 +100,6 @@ try:
                 print ''
 
 
-        print "F engine clock integrity: %s."%{True: 'Pass', False: "FAIL!"}[pps_check]
-        if not pps_check: print c.check_feng_clk_freq(verbose=True)
         print 'Time: %i seconds'%(time.time() - start_t)
         time.sleep(2)
 

@@ -72,8 +72,8 @@ class CasperN_Packet:
         option3 = (1<<63) + (3<<40) + offset            #heap offset
         option4 = (1<<63) + (4<<40) + len(str_data)     #packet payload length
         #add timestamp and data:
-        option5 = (1<<63) + ((0x1536+xeng)<<40) + timestamp
-        option6 = (0<<63) + ((0x2048+xeng)<<40) + 0
+        option5 = (1<<63) + ((0x1600+xeng)<<40) + timestamp
+        option6 = (0<<63) + ((0x1800+xeng)<<40) + 0
 
         #print "PKT sending at timestamp %i for xeng %i at offset %i."%(timestamp,xeng,offset)
 
@@ -117,7 +117,7 @@ class CasperN_TX_Socket(UDP_TX_Socket, CasperN_Packet):
 
 
 class CorrTX:
-    def __init__(self, pid, endian='>',ip='10.0.0.1', x_per_fpga=2, port=7147, payload_len=4096, verbose=False, timestamp_rnd=1024*128):
+    def __init__(self, pid, endian='>',ip='10.0.0.1', x_per_fpga=2, port=7147, payload_len=4096, verbose=False, timestamp_rnd=1024*1024):
         self.pid=pid
         self.endian = endian
         self.casper_sock=CasperN_TX_Socket(ip,port,endian)
@@ -242,14 +242,14 @@ class CorrTX:
 
         complete=[]
         timestamp=[]
-        rounded_timestamp=[]
+        #rounded_timestamp=[]
         realtime_diff=[]
         realtime_last=[]
         int_xeng_vectors=[]
 
         for x in range(self.x_per_fpga):
             timestamp.append(self.get_hw_timestamp(x))
-            rounded_timestamp.append( (timestamp[x]/self.timestamp_rnd) * self.timestamp_rnd)
+            #rounded_timestamp.append( (timestamp[x]/self.timestamp_rnd) * self.timestamp_rnd)
             realtime_diff.append(0)
             realtime_last.append(time.time())
 
@@ -282,12 +282,12 @@ class CorrTX:
             for x in range(self.x_per_fpga):
                 timestamp[x] = self.get_hw_timestamp(x)
                 realtime_diff[x]=time.time() - realtime_last[x]
-                rounded_timestamp[x] = (timestamp[x]/self.timestamp_rnd) * self.timestamp_rnd
+                #rounded_timestamp[x] = (timestamp[x]/self.timestamp_rnd) * self.timestamp_rnd
                 realtime_last[x]=time.time()
 
             #Now that we have collected all this integration's data, send the packets:
             for xnum in range(self.x_per_fpga):
-                print '[%6i] Grabbed %i vectors for X engine %i with timestamp %i (diff %4.2fs).'%(n_integrations,int_xeng_vectors[xnum], self.xeng[xnum], rounded_timestamp[xnum],realtime_diff[xnum])
+                print '[%6i] Grabbed %i vectors for X engine %i with timestamp %i (diff ~%4.2fs).'%(n_integrations,int_xeng_vectors[xnum], self.xeng[xnum], timestamp[xnum],realtime_diff[xnum])
                 data[xnum] = ''.join(data[xnum])
 
                 #n_bls=16*17/2
@@ -297,7 +297,7 @@ class CorrTX:
                 #    print 'Chan %4i (%4i): '%(chan,index),struct.unpack('>ii',data[xnum][index:index+8])
 
                 for cnt in range((len(data[xnum])/self.payload_len)):
-                    if self.casper_sock.send_packet(rounded_timestamp[xnum], self.xeng[xnum], cnt*self.payload_len,len(data[xnum]), data[xnum][cnt*self.payload_len:(cnt+1)*self.payload_len]) != target_pkt_size: print 'TX fail!' 
+                    if self.casper_sock.send_packet(timestamp[xnum], self.xeng[xnum], cnt*self.payload_len,len(data[xnum]), data[xnum][cnt*self.payload_len:(cnt+1)*self.payload_len]) != target_pkt_size: print 'TX fail!' 
                     #time.sleep(0.000001)
                     #print '.',
                 #print ''

@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 '''
-Grabs the contents of the XAUI/10Gbe snap block and plots stuff.
+Grabs the contents of the XAUI/10Gbe snap block on the X engines, averages over a packet (and optionally more) and plots the resultant power spectrum.\n
+\n
 
 Author: Jason Manley\n
 Revisions:\n
@@ -100,7 +101,10 @@ if __name__ == '__main__':
 
     p = OptionParser()
     p.set_usage('snap_xaui_spectrum_construct.py [options] CONFIG_FILE')
-    p.add_option('-a', '--ant', dest = 'ant', type = 'int', default = 0, help = "Select which antenna's data to plot. Default: 0")
+    p.add_option('-a', '--ant', dest = 'ant', type = 'int', default = 0, 
+        help = "Select which antenna's data to plot. Specify just the antenna and get both polarisations. Default: 0")
+    p.add_option('-i', '--integrate', dest = 'integrate', type = 'int', default = 1, 
+        help = "Integrate this number of spectra. Default: 1")
     p.add_option('-v', '--verbose', dest = 'verbose', action = 'store_true', help = 'Be verbose about packet decoding.')
     p.add_option('-p', '--paranoid', dest = 'paranoid', action = 'store_true', help = 'Print paranoid raw output.')
     p.set_description(__doc__)
@@ -142,112 +146,124 @@ try:
 
     print 'Looking for antenna %i on X-engine board %i (%s) XAUI port %i. Antenna %i on that port.' % (ant, xfpga_n, c.xsrvs[xfpga_n], xxaui_n, feng_input)
 
-    snap_rms_i = numpy.zeros(n_chans)
-    snap_rms_q = numpy.zeros(n_chans)
 
-    offset = 0 # channel offset to capture next
-    pkt_len = 0
+    integration = 0
+    integrated_i = numpy.zeros(n_chans)
+    integrated_q = numpy.zeros(n_chans)
 
-    # loop through all the channels
-    while offset < (n_chans - 1):
+    for integration in range(opts.integrate):
 
-        offsetToUse = offset * pkt_len * n_ants_per_xaui
-        print 'Capturing frequency offset %i. Triggering at word offset %i...' % (offset, offsetToUse),
-        sys.stdout.flush()
+        offset = 0 # channel offset to capture next
+        pkt_len = 0
+        snap_rms_i = numpy.zeros(n_chans)
+        snap_rms_q = numpy.zeros(n_chans)
 
-        bram_dmp = c.xfpgas[xfpga_n].get_snap(dev_name, brams, man_trig = False, man_valid = False, wait_period = 3, offset = offsetToUse)
-        print 'Got back data at offset %i.' % bram_dmp['offset']
+        # loop through all the channels
+        while offset < (n_chans - 1):
 
-        print 'Unpacking out-of-band contents...',
-        sys.stdout.flush()
-        bram_oob=dict()
-        bram_oob={'raw':struct.unpack('>%iL'%(bram_dmp['length']),bram_dmp['bram_oob'])}
-        #print bram_oob[f]['raw']
-        bram_oob.update({'linkdn':  [bool(i & (2 ** linkdn_bit)) for i in bram_oob['raw']]})
-        bram_oob.update({'mrst':    [bool(i & (2 ** mrst_bit)) for i in bram_oob['raw']]})
-        bram_oob.update({'adc':     [bool(i & (2 ** adc_bit)) for i in bram_oob['raw']]})
-        bram_oob.update({'eof':     [bool(i & (2 ** eof_bit)) for i in bram_oob['raw']]})
-        bram_oob.update({'sync':    [bool(i & (2 ** sync_bit)) for i in bram_oob['raw']]})
-        bram_oob.update({'hdr':     [bool(i & (2 ** hdr_bit)) for i in bram_oob['raw']]})
-        print 'Done.'
+            offsetToUse = offset * pkt_len * n_ants_per_xaui
+            print 'Capturing frequency offset %i. Triggering at word offset %i...' % (offset, offsetToUse),
+            sys.stdout.flush()
 
-        print 'Unpacking data contents... %i words' % bram_dmp['length']
-        skip_indices = []
-        pkt_hdr_idx = -1
-        for i in range(0, bram_dmp['length']):
-            if opts.paranoid:
-                pkt_64bit = struct.unpack('>Q',bram_dmp['bram_msb'][(4 * i) : (4 * i) + 4] + bram_dmp['bram_lsb'][(4 * i) : (4 * i) + 4])[0]
-                print '[%4i]: %016X'%(i, pkt_64bit),
-                if bram_oob['eof'][i]: print '[EOF]',
-                if bram_oob['linkdn'][i]: print '[LINK DOWN]',
-                if bram_oob['mrst'][i]: print '[MRST]',
-                if bram_oob['adc'][i]: print '[ADC_UPDATE]',
-                if bram_oob['sync'][i]: print '[SYNC]',
-                if bram_oob['hdr'][i]: print '[HDR]',
-                print ''
+            bram_dmp = c.xfpgas[xfpga_n].get_snap(dev_name, brams, man_trig = False, man_valid = False, wait_period = 3, offset = offsetToUse)
+            print 'Got back data at offset %i.' % bram_dmp['offset']
 
-            if bram_oob['linkdn'][i]:
-                print 'LINK DOWN AT %i' % (i)
-            elif bram_oob['adc'][i]:
-                adc, amp = struct.unpack('>II',bram_dmp['bram_msb'][(4 * i) : (4 * i) + 4] + bram_dmp['bram_lsb'][(4 * i) : (4 * i) + 4])
-                adc_ant, adc_pol = c.get_ant_index(xfpga_n, xxaui_n, adc)
-                print ' ADC amplitude update at index %i for input %i (ant %i, %s) with RMS count of %3f.' % (i, adc, adc_ant, adc_pol, numpy.sqrt(float(amp) / adc_levels_acc_len))
-                skip_indices.append(i) #skip_indices records positions in table which are ADC updates and should not be counted towards standard data.
-            elif bram_oob['hdr'][i]:
-                pkt_hdr_idx = i
-                skip_indices = []
-                print ('HEADER RECEIVED')
-            elif bram_oob['eof'][i]:
-                # skip the first packet entry which has no header (snap block triggered on sync)
-                if pkt_hdr_idx < 0: continue
-                print ('EOF RECEIVED')
-                # packet_len is length of data, not including header, in 64-bit words
-                pkt_len = i - pkt_hdr_idx + 1
-                if (pkt_len - len(skip_indices)) != (packet_len + 1):
-                    print 'MALFORMED PACKET! of length %i starting at index %i' % (pkt_len - len(skip_indices), i)
-                    print 'skip_indices: (%i numbers):' % len(skip_indices), skip_indices
-                else:
-                    #pdb.set_trace()
-                    feng_unpkd_pkt = xaui_feng_unpack(xfpga_n, xxaui_n, bram_dmp, pkt_hdr_idx, pkt_len, skip_indices)
-                    if opts.verbose:
-                        print '[Pkt@ %4i Len: %2i]     (MCNT %12u ANT: %1i, Freq: %4i)    {4 bit: Qr: %1.2f Qi: %1.2f Ir %1.2f Ii: %1.2f}'%(\
-                        pkt_hdr_idx,                            \
-                        pkt_len - len(skip_indices),            \
-                        feng_unpkd_pkt['pkt_mcnt'],             \
-                        feng_unpkd_pkt['pkt_ant'],              \
-                        feng_unpkd_pkt['pkt_freq'],             \
-                        feng_unpkd_pkt['level_polQ_r'],         \
-                        feng_unpkd_pkt['level_polQ_i'],         \
-                        feng_unpkd_pkt['level_polI_r'],         \
-                        feng_unpkd_pkt['level_polI_i'])
+            print 'Unpacking out-of-band contents...',
+            sys.stdout.flush()
+            bram_oob=dict()
+            bram_oob={'raw':struct.unpack('>%iL'%(bram_dmp['length']),bram_dmp['bram_oob'])}
+            #print bram_oob[f]['raw']
+            bram_oob.update({'linkdn':  [bool(i & (2 ** linkdn_bit)) for i in bram_oob['raw']]})
+            bram_oob.update({'mrst':    [bool(i & (2 ** mrst_bit)) for i in bram_oob['raw']]})
+            bram_oob.update({'adc':     [bool(i & (2 ** adc_bit)) for i in bram_oob['raw']]})
+            bram_oob.update({'eof':     [bool(i & (2 ** eof_bit)) for i in bram_oob['raw']]})
+            bram_oob.update({'sync':    [bool(i & (2 ** sync_bit)) for i in bram_oob['raw']]})
+            bram_oob.update({'hdr':     [bool(i & (2 ** hdr_bit)) for i in bram_oob['raw']]})
+            print 'Done.'
 
-                    if feng_unpkd_pkt['pkt_ant'] == ant:
-                        snap_rms_q[feng_unpkd_pkt['pkt_freq']] = feng_unpkd_pkt['rms_polQ']
-                        snap_rms_i[feng_unpkd_pkt['pkt_freq']] = feng_unpkd_pkt['rms_polI']
+            print 'Unpacking data contents... %i words' % bram_dmp['length']
+            skip_indices = []
+            pkt_hdr_idx = -1
+            for i in range(0, bram_dmp['length']):
+                if opts.paranoid:
+                    pkt_64bit = struct.unpack('>Q',bram_dmp['bram_msb'][(4 * i) : (4 * i) + 4] + bram_dmp['bram_lsb'][(4 * i) : (4 * i) + 4])[0]
+                    print '[%4i]: %016X'%(i, pkt_64bit),
+                    if bram_oob['eof'][i]: print '[EOF]',
+                    if bram_oob['linkdn'][i]: print '[LINK DOWN]',
+                    if bram_oob['mrst'][i]: print '[MRST]',
+                    if bram_oob['adc'][i]: print '[ADC_UPDATE]',
+                    if bram_oob['sync'][i]: print '[SYNC]',
+                    if bram_oob['hdr'][i]: print '[HDR]',
+                    print ''
 
-                    if (offset >= (n_chans - 1)):
-                        # Got all the channels, exit.
-                        break
-                    elif (offset - 2 > feng_unpkd_pkt['pkt_freq']):
-                        print 'Snap block failed to capture at the correct trigger offset. Exiting.'
-                        exit_clean()
+                if bram_oob['linkdn'][i]:
+                    print 'LINK DOWN AT %i' % (i)
+                elif bram_oob['adc'][i]:
+                    adc, amp = struct.unpack('>II',bram_dmp['bram_msb'][(4 * i) : (4 * i) + 4] + bram_dmp['bram_lsb'][(4 * i) : (4 * i) + 4])
+                    adc_ant, adc_pol = c.get_ant_index(xfpga_n, xxaui_n, adc)
+                    print ' ADC amplitude update at index %i for input %i (ant %i, %s) with RMS count of %3f.' % (i, adc, adc_ant, adc_pol, numpy.sqrt(float(amp) / adc_levels_acc_len))
+                    skip_indices.append(i) #skip_indices records positions in table which are ADC updates and should not be counted towards standard data.
+                elif bram_oob['hdr'][i]:
+                    pkt_hdr_idx = i
+                    skip_indices = []
+                    #print ('HEADER RECEIVED')
+                elif bram_oob['eof'][i]:
+                    # skip the first packet entry which has no header (snap block triggered on sync)
+                    if pkt_hdr_idx < 0: continue
+                    #print ('EOF RECEIVED')
+                    # packet_len is length of data, not including header, in 64-bit words
+                    pkt_len = i - pkt_hdr_idx + 1
+                    if (pkt_len - len(skip_indices)) != (packet_len + 1):
+                        print 'MALFORMED PACKET! of length %i starting at index %i' % (pkt_len - len(skip_indices), i)
+                        print 'skip_indices: (%i numbers):' % len(skip_indices), skip_indices
                     else:
-                        offset = feng_unpkd_pkt['pkt_freq']
-        print 'New offset is %i, waiting for n_chans(%i).' % (offset, n_chans)
+                        #pdb.set_trace()
+                        feng_unpkd_pkt = xaui_feng_unpack(xfpga_n, xxaui_n, bram_dmp, pkt_hdr_idx, pkt_len, skip_indices)
+                        if opts.verbose:
+                            print '[Pkt@ %4i Len: %2i]     (MCNT %12u ANT: %1i, Freq: %4i)    {4 bit: Qr: %1.2f Qi: %1.2f Ir %1.2f Ii: %1.2f} {RMS: Q: %1.2f I: %1.2f}'%(\
+                            pkt_hdr_idx,                            \
+                            pkt_len - len(skip_indices),            \
+                            feng_unpkd_pkt['pkt_mcnt'],             \
+                            feng_unpkd_pkt['pkt_ant'],              \
+                            feng_unpkd_pkt['pkt_freq'],             \
+                            feng_unpkd_pkt['level_polQ_r'],         \
+                            feng_unpkd_pkt['level_polQ_i'],         \
+                            feng_unpkd_pkt['level_polI_r'],         \
+                            feng_unpkd_pkt['level_polI_i'],         \
+                            feng_unpkd_pkt['rms_polQ'],         \
+                            feng_unpkd_pkt['rms_polI'])
+
+                        if feng_unpkd_pkt['pkt_ant'] == ant:
+                            snap_rms_q[feng_unpkd_pkt['pkt_freq']] = feng_unpkd_pkt['rms_polQ']
+                            snap_rms_i[feng_unpkd_pkt['pkt_freq']] = feng_unpkd_pkt['rms_polI']
+
+                        if (offset >= (n_chans - 1)):
+                            # Got all the channels, exit.
+                            break
+                        elif (offset - 2 > feng_unpkd_pkt['pkt_freq']):
+                            print 'Snap block failed to capture at the correct trigger offset. Exiting.'
+                            exit_clean()
+                        else:
+                            offset = feng_unpkd_pkt['pkt_freq']
+            print 'New offset is %i, waiting for n_chans(%i).' % (offset, n_chans)
+
+        integrated_i = numpy.add(integrated_i,snap_rms_i)
+        integrated_q = numpy.add(integrated_q,snap_rms_q)
+        print 'Captured %i integrations out of %i.'%(integration,opts.integrate)
 
     print '\n\nDone Capturing. Plotting...' 
 
     pylab.figure(ant)
     ax1=pylab.subplot(211)
     pylab.title('Antenna %i\n"X" input rms'%ant)
-    pylab.plot(range(0,n_chans),snap_rms_q)
+    pylab.plot(range(0,n_chans),integrated_q)
     #pylab.plot(range(0,n_chans),snap_rms_q,'.')
     pylab.setp(ax1.get_xticklabels(), visible=False)
 
     pylab.subplot(212,sharex=ax1,sharey=ax1)
     pylab.title('"Y" input rms')
     #pylab.plot(range(0,n_chans),snap_rms_i,'.',label='ant%i'%xaui_ant)
-    pylab.plot(range(0,n_chans),snap_rms_i)
+    pylab.plot(range(0,n_chans),integrated_i)
     pylab.ylim((0,1))
     pylab.xlim(0,n_chans)
     pylab.xlabel('Channel')
